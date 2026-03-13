@@ -1,0 +1,4 @@
+extracted_sets/
+*.mp4
+.idea/
+__pycache__/
