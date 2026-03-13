@@ -1,84 +1,89 @@
 import cv2
 import xml.etree.ElementTree as ET
 import os
-import shutil
 
-# --- EINSTELLUNGEN ---
-VIDEO_FILE = r"D:\BOR - BEH\2025-07-11 BOR-BEH.mp4"
-XML_FILE = r"D:\BOR - BEH\annotations.xml"
-OUTPUT_DIR = r"D:\BOR - BEH\extracted_sets"
+# --- KONFIGURATION ---
+SSD_PATH = r"D:"\
+# Der zentrale Ordner für alle deine Clips (über alle Spiele hinweg)
+GLOBAL_OUTPUT_DIR = os.path.join(SSD_PATH, "Master_Dataset_Extracted")
 
-# ORDNER BEREINIGEN (Damit die Statistik nicht doppelt zählt)
-if os.path.exists(OUTPUT_DIR):
-    shutil.rmtree(OUTPUT_DIR)
-os.makedirs(OUTPUT_DIR)
+# Hier fügst du einfach neue Spiele hinzu, sobald du die XMLs hast
+# Struktur: (Ordnername_der_XML, Video_Dateiname, Spiel_Kürzel_für_Datei)
+GAMES_TO_PROCESS = [
+    ("BOR - BEH", "2025-07-11 BOR-BEH.mp4", "BOR_BEH"),
+    # ("KUH - KIR", "2025-08-01 KUH-KIR.mp4", "KUH_KIR"), # Beispiel für später
+]
 
-# XML laden
-tree = ET.parse(XML_FILE)
-root = tree.getroot()
+TARGET_SIZE = (448, 448)
+TARGET_FPS = 30
+MAX_FRAMES = 60
 
-# Video laden
-cap = cv2.VideoCapture(VIDEO_FILE)
-if not cap.isOpened():
-    print(f"Fehler: Konnte Video nicht öffnen unter {VIDEO_FILE}")
-    exit()
 
-fps = cap.get(cv2.CAP_PROP_FPS)
-width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+def extract_all_games():
+    # Ordner erstellen falls er noch nicht existiert
+    if not os.path.exists(GLOBAL_OUTPUT_DIR):
+        os.makedirs(GLOBAL_OUTPUT_DIR)
+        print(f"Zentraler Ordner erstellt: {GLOBAL_OUTPUT_DIR}")
 
-print(f"Starte Extraktion mit {fps} FPS...")
+    for xml_folder, video_name, game_prefix in GAMES_TO_PROCESS:
+        print(f"\n--- Starte Bearbeitung von: {game_prefix} ---")
 
-# Tracks verarbeiten
-for track in root.findall('track'):
-    track_id = track.get('id')
+        video_path = os.path.join(SSD_PATH, xml_folder, video_name)
+        xml_path = os.path.join(SSD_PATH, xml_folder, "annotations.xml")
 
-    # Das richtige Attribut finden
-    specific_label = "unknown"
-    for attr in track.findall('.//attribute'):
-        if attr.get('name') == 'type':  # Wir suchen gezielt nach dem 'type' Attribut
-            specific_label = attr.text
-            break
+        if not os.path.exists(video_path) or not os.path.exists(xml_path):
+            print(f"WARNUNG: Video oder XML fehlt für {game_prefix}. Überspringe...")
+            continue
 
-    # Unterordner erstellen
-    label_dir = os.path.join(OUTPUT_DIR, specific_label)
-    if not os.path.exists(label_dir):
-        os.makedirs(label_dir)
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        cap = cv2.VideoCapture(video_path)
+        orig_fps = cap.get(cv2.CAP_PROP_FPS)
+        if orig_fps == 0: orig_fps = 30
 
-    # Frames extrahieren
-    boxes = track.findall('box')
-    if not boxes: continue
+        for track in root.findall('track'):
+            label = track.get('label', 'unknown')
+            track_id = track.get('id', '0')
 
-    start_frame = int(boxes[0].get('frame'))
-    end_frame = int(boxes[-1].get('frame'))
+            first_box = track.find('box')
+            if first_box is None: continue
 
-    output_filename = os.path.join(label_dir, f"track_{track_id}.mp4")
+            attr = first_box.find(".//attribute[@name='type']")
+            if attr is not None:
+                label = attr.text
 
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_filename, fourcc, fps, (width, height))
+            # Ordnerstruktur im globalen Verzeichnis
+            label = label.replace(" ", "_")
+            label_dir = os.path.join(GLOBAL_OUTPUT_DIR, label)
+            os.makedirs(label_dir, exist_ok=True)
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            # Zeitlicher Offset (0.5s Vorlauf)
+            start_frame = int(first_box.get('frame'))
+            offset = int(orig_fps * 0.5)
+            actual_start = max(0, start_frame - offset)
 
-    for f in range(start_frame, end_frame + 1):
-        ret, frame = cap.read()
-        if not ret: break
-        out.write(frame)
+            # Eindeutiger Dateiname: SPIEL_ID.mp4
+            output_name = f"{game_prefix}_set_{track_id}.mp4"
+            output_path = os.path.join(label_dir, output_name)
 
-    out.release()
-    print(f"Clip erstellt: {specific_label} (ID: {track_id})")
+            # Codec & Writer (mp4v für maximale Stabilität)
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_path, fourcc, TARGET_FPS, TARGET_SIZE)
 
-cap.release()
+            cap.set(cv2.CAP_PROP_POS_FRAMES, actual_start)
 
-# --- STATISTIK ---
-print("\n" + "=" * 35)
-print("ZUSAMMENFASSUNG DER EXTRAKTION")
-print("=" * 35)
-total = 0
-for folder in os.listdir(OUTPUT_DIR):
-    folder_path = os.path.join(OUTPUT_DIR, folder)
-    if os.path.isdir(folder_path):
-        count = len([f for f in os.listdir(folder_path) if f.endswith('.mp4')])
-        print(f"- {folder:25}: {count} Clips")
-        total += count
-print("=" * 35)
-print(f"GESAMT: {total} Clips")
+            for _ in range(MAX_FRAMES):
+                ret, frame = cap.read()
+                if not ret: break
+                out.write(cv2.resize(frame, TARGET_SIZE, interpolation=cv2.INTER_CUBIC))
+
+            out.release()
+            print(f"  Saved: {label}/{output_name}")
+
+        cap.release()
+
+    print("\n--- Alle Spiele erfolgreich im Master-Dataset zusammengeführt! ---")
+
+
+if __name__ == "__main__":
+    extract_all_games()
