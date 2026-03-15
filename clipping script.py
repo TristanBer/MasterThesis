@@ -10,7 +10,7 @@ GLOBAL_OUTPUT_DIR = os.path.join(SSD_PATH, "Master_Dataset_Extracted")
 # Hier fügst du einfach neue Spiele hinzu, sobald du die XMLs hast
 # Struktur: (Ordnername_der_XML, Video_Dateiname, Spiel_Kürzel_für_Datei)
 GAMES_TO_PROCESS = [
-    ("BOR - BEH", "2025-07-11 BOR-BEH.mp4", "BOR_BEH"),
+    ("SAG-FROE", "2025-07-11 SAG-FRÖ.mp4", "SAG_FROE")
     # ("KUH - KIR", "2025-08-01 KUH-KIR.mp4", "KUH_KIR"), # Beispiel für später
 ]
 
@@ -28,7 +28,7 @@ def extract_all_games():
     for xml_folder, video_name, game_prefix in GAMES_TO_PROCESS:
         print(f"\n--- Starte Bearbeitung von: {game_prefix} ---")
 
-        video_path = os.path.join(SSD_PATH, xml_folder, video_name)
+        video_path = os.path.join("D:\BeachVolleyballData", video_name)
         xml_path = os.path.join(SSD_PATH, xml_folder, "annotations.xml")
 
         if not os.path.exists(video_path) or not os.path.exists(xml_path):
