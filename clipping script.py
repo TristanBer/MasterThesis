@@ -10,7 +10,8 @@ GLOBAL_OUTPUT_DIR = os.path.join(SSD_PATH, "Master_Dataset_Extracted")
 # Hier fügst du einfach neue Spiele hinzu, sobald du die XMLs hast
 # Struktur: (Ordnername_der_XML, Video_Dateiname, Spiel_Kürzel_für_Datei)
 GAMES_TO_PROCESS = [
-    ("HAR-AHR", "2025-09-05 HAR-AHR.mp4", "HAR_AHR")
+    ("KUN-GRÜ", "2025-07-13 KUN-GRÜ.mp4", "KUN_GRÜ")
+    #("HAR-AHR", "2025-09-05 HAR-AHR.mp4", "HAR_AHR")
     # ("SAG-FROE", "2025-09-05 HAR-AHR.mp4", "SAG_FROE")
     # ("KUH - KIR", "2025-08-01 KUH-KIR.mp4", "KUH_KIR")
 ]
