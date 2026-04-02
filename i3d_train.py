@@ -6,6 +6,7 @@ from torchvision import transforms
 from sklearn.metrics import classification_report
 from dataset import VolleyballDataset
 from i3d_model import VolleyballI3DModel
+import matplotlib.pyplot as plt
 
 # --- 1. SETUP & HYPERPARAMETERS ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -17,7 +18,7 @@ IMG_SIZE = 112
 BATCH_SIZE = 4
 
 # Two-stage training
-STAGE1_EPOCHS = 5   # Frozen backbone, train head only
+STAGE1_EPOCHS = 5  # Frozen backbone, train head only
 STAGE2_EPOCHS = 15  # Full fine-tuning
 
 # --- 2. DATA PREPARATION ---
@@ -27,8 +28,6 @@ transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.43216, 0.394666, 0.37645],
                          std=[0.22803, 0.22145, 0.216989])
-    # Note: These are the Kinetics-400 stats, correct for R3D pretraining
-    # (Different from ImageNet stats used in baseline!)
 ])
 
 full_dataset = VolleyballDataset(root_dir=ROOT_DIR, transform=transform, num_frames=NUM_FRAMES)
@@ -44,6 +43,7 @@ val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False, num_worker
 num_classes = len(full_dataset.class_names)
 model = VolleyballI3DModel(num_classes=num_classes, freeze_backbone=True).to(device)
 criterion = nn.CrossEntropyLoss()
+
 
 # --- 4. HELPER: one epoch of training ---
 def run_epoch(loader, is_train, optimizer=None):
@@ -78,6 +78,9 @@ def run_epoch(loader, is_train, optimizer=None):
     return avg_loss, accuracy, all_preds, all_labels
 
 
+# Initialize history tracker before any training begins
+history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
+
 # --- 5. STAGE 1: Train only the FC head ---
 print(f"\n=== STAGE 1: Training head only for {STAGE1_EPOCHS} epochs ===")
 optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
@@ -88,7 +91,13 @@ for epoch in range(STAGE1_EPOCHS):
     train_loss, train_acc, _, _ = run_epoch(train_loader, is_train=True, optimizer=optimizer)
     val_loss, val_acc, val_preds, val_labels = run_epoch(val_loader, is_train=False)
 
-    print(f"[S1 Epoch {epoch+1}/{STAGE1_EPOCHS}] "
+    # Save metrics for this epoch
+    history["train_loss"].append(train_loss)
+    history["val_loss"].append(val_loss)
+    history["train_acc"].append(train_acc)
+    history["val_acc"].append(val_acc)
+
+    print(f"[S1 Epoch {epoch + 1}/{STAGE1_EPOCHS}] "
           f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | "
           f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
 
@@ -96,7 +105,6 @@ for epoch in range(STAGE1_EPOCHS):
         best_val_acc = val_acc
         torch.save(model.state_dict(), "i3d_best.pth")
         print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
-
 
 # --- 6. STAGE 2: Unfreeze and fine-tune the whole network ---
 print(f"\n=== STAGE 2: Full fine-tuning for {STAGE2_EPOCHS} epochs ===")
@@ -112,7 +120,13 @@ for epoch in range(STAGE2_EPOCHS):
 
     scheduler.step(val_loss)
 
-    print(f"[S2 Epoch {epoch+1}/{STAGE2_EPOCHS}] "
+    # Save metrics for this epoch
+    history["train_loss"].append(train_loss)
+    history["val_loss"].append(val_loss)
+    history["train_acc"].append(train_acc)
+    history["val_acc"].append(val_acc)
+
+    print(f"[S2 Epoch {epoch + 1}/{STAGE2_EPOCHS}] "
           f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | "
           f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
 
@@ -129,3 +143,35 @@ _, final_acc, final_preds, final_labels = run_epoch(val_loader, is_train=False)
 print(f"Final Val Accuracy: {final_acc:.2f}%")
 print("\nPer-class report:")
 print(classification_report(final_labels, final_preds, target_names=full_dataset.class_names))
+
+# --- 8. PLOTTING THE LEARNING CURVES ---
+total_epochs = STAGE1_EPOCHS + STAGE2_EPOCHS
+epochs_range = range(1, total_epochs + 1)
+
+plt.figure(figsize=(12, 5))
+
+# Accuracy Plot
+plt.subplot(1, 2, 1)
+plt.plot(epochs_range, history["train_acc"], label="Train Accuracy", marker='o')
+plt.plot(epochs_range, history["val_acc"], label="Val Accuracy", marker='o')
+plt.axvline(x=STAGE1_EPOCHS, color='gray', linestyle='--', label='Unfreeze point')
+plt.title("I3D Training and Validation Accuracy")
+plt.xlabel("Epochs")
+plt.ylabel("Accuracy (%)")
+plt.legend()
+plt.grid(True)
+
+# Loss Plot
+plt.subplot(1, 2, 2)
+plt.plot(epochs_range, history["train_loss"], label="Train Loss", marker='o')
+plt.plot(epochs_range, history["val_loss"], label="Val Loss", marker='o')
+plt.axvline(x=STAGE1_EPOCHS, color='gray', linestyle='--', label='Unfreeze point')
+plt.title("I3D Training and Validation Loss")
+plt.xlabel("Epochs")
+plt.ylabel("Loss")
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
+plt.savefig("i3d_learning_curve.png", dpi=300)
+print("\nGraph saved as 'i3d_learning_curve.png'")

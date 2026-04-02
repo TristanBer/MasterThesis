@@ -22,7 +22,7 @@ VIDEO_TO_TEST = r"D:\Master_Dataset_Extracted\overhead_set_forward\SAG_FROE_set_
 
 CONFIGS = {
     "baseline": {
-        "model_path": "volleyball_model_final.pth",
+        "model_path": "baseline_best.pth",
         "num_frames": 60,
         "img_size": 224,
         "mean": [0.485, 0.456, 0.406],
