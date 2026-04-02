@@ -104,7 +104,7 @@ model.unfreeze_backbone()
 
 # Lower LR + weight decay for fine-tuning
 optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5, verbose=True)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
 
 for epoch in range(STAGE2_EPOCHS):
     train_loss, train_acc, _, _ = run_epoch(train_loader, is_train=True, optimizer=optimizer)

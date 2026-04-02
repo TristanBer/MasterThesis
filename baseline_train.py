@@ -22,7 +22,7 @@ transform = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-full_dataset = VolleyballDataset(root_dir=ROOT_DIR, transform=transform)
+full_dataset = VolleyballDataset(root_dir=ROOT_DIR, transform=transform, num_frames=60)
 
 train_size = int(0.8 * len(full_dataset))
 val_size = len(full_dataset) - train_size
@@ -42,6 +42,8 @@ history_train_acc, history_val_acc = [], []
 
 # --- 4. TRAINING LOOP ---
 print(f"Starte Training auf {device} für {EPOCHS} Epochen mit {len(full_dataset)} Clips...")
+
+best_val_acc = 0.0
 
 for epoch in range(EPOCHS):
     # TRAINING PHASE
@@ -86,6 +88,10 @@ for epoch in range(EPOCHS):
     ep_val_loss = val_loss / len(val_loader)
     ep_train_acc = 100 * correct_train / total_train
     ep_val_acc = 100 * correct_val / total_val
+    if ep_val_acc > best_val_acc:
+        best_val_acc = ep_val_acc
+        torch.save(model.state_dict(), "baseline_best.pth")
+        print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
     history_train_loss.append(ep_train_loss)
     history_val_loss.append(ep_val_loss)

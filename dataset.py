@@ -83,6 +83,6 @@ if __name__ == "__main__":
     video_tensor, label = dataset[0]
 
     print(f"Shape des Video-Tensors: {video_tensor.shape}")
-    # Erwartet: [60, 3, 224, 224] -> (Frames, Channels, Height, Width)
+    # Erwartet: [16, 3, 224, 224] -> (Frames, Channels, Height, Width)
 
     print(f"Label des Clips: {label} (Klasse: {dataset.class_names[label]})")
