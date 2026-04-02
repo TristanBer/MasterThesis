@@ -1,80 +1,93 @@
 import torch
 import cv2
-import os
+import numpy as np
 from torchvision import transforms
 from baseline_model import VolleyballBaselineModel
+from i3d_model import VolleyballI3DModel
 
-# --- 1. SETUP ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MODEL_PATH = "volleyball_model_final.pth"
 
-# HIER EINFACH DEN PFAD ZU EINEM BELIEBIGEN CLIP EINTRAGEN
-VIDEO_TO_TEST = r"D:\Master_Dataset_Extracted\overhead_set_forward\SAG_FROE_set_7.mp4"
-
-# WICHTIG: Diese Liste muss exakt der alphabetischen Reihenfolge deiner Ordner entsprechen!
-# Schau in deinen Master_Dataset_Extracted Ordner und trage sie hier ein:
 CLASS_NAMES = [
     'Others',
     'bump_set_backward',
     'bump_set_forward',
     'overhead_set_backward',
     'overhead_set_forward',
-    ]
+]
 
-def predict_video(video_path):
-    print(f"Lade Modell von: {MODEL_PATH}...")
-    model = VolleyballBaselineModel(num_classes=len(CLASS_NAMES)).to(device)
+# --- CHANGE THESE TWO LINES TO SWITCH MODELS ---
+MODEL_TYPE = "i3d"   # "baseline" or "i3d"
+VIDEO_TO_TEST = r"D:\Master_Dataset_Extracted\overhead_set_forward\SAG_FROE_set_7.mp4"
+# ------------------------------------------------
 
-    # weights_only=True ist ein Sicherheitsfeature in neueren PyTorch-Versionen
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=device, weights_only=True))
-    model.eval()  # Modell in den Vorhersage-Modus schalten (wichtig!)
+CONFIGS = {
+    "baseline": {
+        "model_path": "volleyball_model_final.pth",
+        "num_frames": 60,
+        "img_size": 224,
+        "mean": [0.485, 0.456, 0.406],
+        "std":  [0.229, 0.224, 0.225],
+    },
+    "i3d": {
+        "model_path": "i3d_best.pth",
+        "num_frames": 16,
+        "img_size": 112,
+        "mean": [0.43216, 0.394666, 0.37645],
+        "std":  [0.22803, 0.22145, 0.216989],
+    }
+}
+
+def predict_video(video_path, model_type):
+    cfg = CONFIGS[model_type]
+
+    # Load correct model
+    if model_type == "baseline":
+        model = VolleyballBaselineModel(num_classes=len(CLASS_NAMES)).to(device)
+    else:
+        model = VolleyballI3DModel(num_classes=len(CLASS_NAMES)).to(device)
+
+    model.load_state_dict(torch.load(cfg["model_path"], map_location=device, weights_only=True))
+    model.eval()
 
     transform = transforms.Compose([
         transforms.ToPILImage(),
-        transforms.Resize((224, 224)),
+        transforms.Resize((cfg["img_size"], cfg["img_size"])),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=cfg["mean"], std=cfg["std"])
     ])
 
-    print(f"Analysiere Video: {video_path}...")
     cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    indices = np.linspace(0, total_frames - 1, cfg["num_frames"], dtype=int)
+
     frames = []
-
-    while True:
+    for i in indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, i)
         ret, frame = cap.read()
-        if not ret: break
-
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frames.append(transform(frame))
-
+        if ret:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frames.append(transform(frame))
     cap.release()
 
     if len(frames) == 0:
-        print("Fehler: Video konnte nicht gelesen werden.")
+        print("Error: video could not be read.")
         return
 
-    # Tensor bauen: Aus (60, 3, 224, 224) wird (1, 60, 3, 224, 224)
-    # Die "1" steht für die Batch-Size (wir testen ja nur 1 Video)
     video_tensor = torch.stack(frames).unsqueeze(0).to(device)
 
-    # Vorhersage machen
     with torch.no_grad():
         outputs = model(video_tensor)
-        # Softmax wandelt die rohen Zahlen in Prozent-Wahrscheinlichkeiten um
-        probabilities = torch.nn.functional.softmax(outputs, dim=1)
+        probs = torch.nn.functional.softmax(outputs, dim=1)
+        predicted_idx = torch.argmax(probs, dim=1).item()
+        confidence = probs[0][predicted_idx].item() * 100
 
-        predicted_idx = torch.argmax(probabilities, dim=1).item()
-        confidence = probabilities[0][predicted_idx].item() * 100
-
-    print("\n--- ERGEBNIS ---")
-    print(f"Vorhersage: {CLASS_NAMES[predicted_idx]}")
-    print(f"Sicherheit: {confidence:.2f}%")
-
-    # Optional: Alle Wahrscheinlichkeiten anzeigen
-    print("\nDetails:")
+    print(f"\n--- RESULT ({model_type.upper()}) ---")
+    print(f"Prediction : {CLASS_NAMES[predicted_idx]}")
+    print(f"Confidence : {confidence:.2f}%")
+    print("\nAll probabilities:")
     for i, cls in enumerate(CLASS_NAMES):
-        print(f"  {cls}: {probabilities[0][i].item() * 100:.2f}%")
+        print(f"  {cls}: {probs[0][i].item() * 100:.2f}%")
 
 
 if __name__ == "__main__":
-    predict_video(VIDEO_TO_TEST)
+    predict_video(VIDEO_TO_TEST, MODEL_TYPE)

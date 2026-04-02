@@ -6,8 +6,8 @@ import csv
 SSD_PATH = "D:\\"
 GLOBAL_OUTPUT_DIR = os.path.join(SSD_PATH, "Master_Dataset_Extracted")
 
-# Pfad zu deiner neuen Test-CSV-Datei
-CSV_PATH = r"D:\KUH-PON\KUH-PON_csv_annotation.csv"
+# Pfad zur CSV-Datei
+CSV_PATH = r"D:\MUL-BEU\MUL-BEU_csv_annotation.csv"
 
 # Ordner, in dem die Original-Videos liegen
 # WICHTIG: Falls dein KUH-PON.mp4 nicht hier, sondern direkt in D:\KUH-PON liegt,

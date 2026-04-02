@@ -6,13 +6,10 @@ import numpy as np
 from torchvision import transforms
 
 class VolleyballDataset(Dataset):
-    def __init__(self, root_dir, transform=None):
-        """
-        root_dir: Pfad zu 'Master_Dataset_Extracted'
-        transform: PyTorch Transformationen (Normalisierung, etc.)
-        """
+    def __init__(self, root_dir, transform=None, num_frames=16):
         self.root_dir = root_dir
         self.transform = transform
+        self.num_frames = num_frames
         self.video_files = []
         self.labels = []
 
@@ -38,31 +35,30 @@ class VolleyballDataset(Dataset):
         label = self.labels[idx]
 
         cap = cv2.VideoCapture(video_path)
-        frames = []
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        while True:
+        # Uniformly sample exactly num_frames indices across the clip
+        indices = np.linspace(0, total_frames - 1, self.num_frames, dtype=int)
+
+        frames = []
+        for i in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
             ret, frame = cap.read()
             if not ret:
-                break
-
-            # Konvertiere von BGR (OpenCV) zu RGB
+                # Fallback: repeat the last valid frame if read fails
+                if frames:
+                    frames.append(frames[-1])
+                continue
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-            # WICHTIG: ResNet erwartet Bilder im Bereich [0, 1] und normalisiert
             if self.transform:
                 frame = self.transform(frame)
             else:
-                # Fallback: Einfache Konvertierung zu Tensor
                 frame = torch.from_numpy(frame).permute(2, 0, 1).float() / 255.0
-
             frames.append(frame)
 
         cap.release()
 
-        # Stack zu (Frames, Channels, Height, Width)
-        # Beispiel: (60, 3, 224, 224)
-        video_tensor = torch.stack(frames)
-
+        video_tensor = torch.stack(frames)  # Shape: (num_frames, C, H, W)
         return video_tensor, label
 
 if __name__ == "__main__":
@@ -81,7 +77,7 @@ if __name__ == "__main__":
     root = r"D:\Master_Dataset_Extracted"
 
     # Dataset instanziieren
-    dataset = VolleyballDataset(root_dir=root, transform=transform)
+    dataset = VolleyballDataset(root_dir=root, transform=transform, num_frames=16)
 
     # Den ersten Clip laden
     video_tensor, label = dataset[0]
