@@ -7,11 +7,9 @@ SSD_PATH = "D:\\"
 GLOBAL_OUTPUT_DIR = os.path.join(SSD_PATH, "Master_Dataset_Extracted")
 
 # Pfad zur CSV-Datei
-CSV_PATH = r"D:\MUL-BEU\MUL-BEU_csv_annotation.csv"
+CSV_PATH = r"D:\annotated_games\HEN-PFR\HEN-PFR_csv_annotation.csv"
 
 # Ordner, in dem die Original-Videos liegen
-# WICHTIG: Falls dein KUH-PON.mp4 nicht hier, sondern direkt in D:\KUH-PON liegt,
-# ändere diesen Pfad entsprechend auf r"D:\KUH-PON"
 VIDEO_DIR = os.path.join(SSD_PATH, "BeachVolleyballData")
 
 TARGET_SIZE = (448, 448)
@@ -23,7 +21,6 @@ OFFSET_FRAMES = 30  # Startet 1 Sekunde vor dem Ballkontakt
 def extract_from_csv():
     os.makedirs(GLOBAL_OUTPUT_DIR, exist_ok=True)
 
-    # 'utf-8-sig' fängt eventuelle Formatierungsprobleme ab, delimiter=';' ist Standard im deutschen Excel
     with open(CSV_PATH, mode='r', encoding='utf-8-sig') as file:
         reader = csv.DictReader(file, delimiter=';')
 
@@ -42,12 +39,12 @@ def extract_from_csv():
             label_dir = os.path.join(GLOBAL_OUTPUT_DIR, label)
             os.makedirs(label_dir, exist_ok=True)
 
-            # Einzigartiger Dateiname (z.B. KUH-PON_frame_16654.mp4)
+            # Einzigartiger Dateiname
             prefix = video_name.replace(".mp4", "").replace(" ", "_")
             output_name = f"{prefix}_frame_{kontakt_frame}.mp4"
             output_path = os.path.join(label_dir, output_name)
 
-            # Startframe berechnen (darf nicht ins Negative rutschen)
+            # Startframe berechnen (darf nicht ins Negative rutschen sonst wieder crash)
             actual_start = max(0, kontakt_frame - OFFSET_FRAMES)
 
             # Video öffnen und zum Startframe springen

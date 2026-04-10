@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ROOT_DIR = r"D:\Master_Dataset_Extracted"
 
-# I3D uses 16 frames at 112x112 — memory-efficient and matches Kinetics pretraining
+# I3D needs 16 frames at 112x112 — for Kinetics pretraining
 NUM_FRAMES = 16
 IMG_SIZE = 112
 BATCH_SIZE = 4
@@ -108,6 +108,9 @@ for epoch in range(STAGE1_EPOCHS):
 
 # --- 6. STAGE 2: Unfreeze and fine-tune the whole network ---
 print(f"\n=== STAGE 2: Full fine-tuning for {STAGE2_EPOCHS} epochs ===")
+
+# ADD THIS LINE: Load the best Stage 1 weights before fine-tuning
+model.load_state_dict(torch.load("i3d_best.pth", map_location=device, weights_only=True))
 model.unfreeze_backbone()
 
 # Lower LR + weight decay for fine-tuning
