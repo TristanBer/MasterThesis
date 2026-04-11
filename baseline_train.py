@@ -3,14 +3,16 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
-import matplotlib.pyplot as plt  # NEU: Für die Graphen
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import confusion_matrix
 from dataset import VolleyballDataset
-from baseline_model import VolleyballBaselineModel  # Name deiner Model-Datei prüfen!
+from baseline_model import VolleyballBaselineModel
 
 # --- 1. SETUP & HYPERPARAMETERS ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH_SIZE = 4
-EPOCHS = 10  # Auf 10 erhöht für den Nachtlauf
+EPOCHS = 10  # Auf 10 erhöht für den trainingslauf 2
 LEARNING_RATE = 0.001
 ROOT_DIR = r"D:\Master_Dataset_Extracted"
 
@@ -36,7 +38,7 @@ model = VolleyballBaselineModel(num_classes=len(full_dataset.class_names)).to(de
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-# --- NEU: LISTEN FÜR DEN GRAPHEN ---
+# --- LISTEN FÜR DEN GRAPHEN ---
 history_train_loss, history_val_loss = [], []
 history_train_acc, history_val_acc = [], []
 
@@ -54,6 +56,10 @@ for epoch in range(EPOCHS):
 
     for videos, labels in train_loader:
         videos, labels = videos.to(device), labels.to(device)
+
+        for i in range(videos.size(0)):
+            if torch.rand(1).item() < 0.5:  # 50% Wahrscheinlichkeit
+                videos[i] = torch.flip(videos[i], dims=[3])
 
         outputs = model(videos)
         loss = criterion(outputs, labels)
@@ -106,7 +112,7 @@ for epoch in range(EPOCHS):
 torch.save(model.state_dict(), "volleyball_model_final.pth")
 print("\nTraining abgeschlossen. Modell unter 'volleyball_model_final.pth' gespeichert.")
 
-# --- NEU: GRAPHEN ZEICHNEN UND SPEICHERN ---
+# --- GRAPHEN ZEICHNEN UND SPEICHERN ---
 print("Erstelle Lernkurven-Graph...")
 epochs_range = range(1, EPOCHS + 1)
 
@@ -136,3 +142,35 @@ plt.grid(True)
 plt.tight_layout()
 plt.savefig("learning_curve.png", dpi=300)
 print("Graph erfolgreich als 'learning_curve.png' gespeichert!")
+
+# --- FINAL EVALUATION (Confusion Matrix Daten sammeln) ---
+print("\nLade bestes Modell für die Confusion Matrix...")
+model.load_state_dict(torch.load("baseline_best.pth", map_location=device, weights_only=True))
+model.eval()
+
+final_labels = []
+final_preds = []
+
+with torch.no_grad():
+    for videos, labels in val_loader:
+        videos, labels = videos.to(device), labels.to(device)
+        outputs = model(videos)
+        _, predicted = torch.max(outputs.data, 1)
+
+        # Die Tensoren von der Grafikkarte holen und in normale Python-Listen packen
+        final_labels.extend(labels.cpu().tolist())
+        final_preds.extend(predicted.cpu().tolist())
+
+print("Erstelle Confusion Matrix für baseline...")
+cm = confusion_matrix(final_labels, final_preds)
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=full_dataset.class_names,
+            yticklabels=full_dataset.class_names)
+plt.ylabel('Tatsächliches Zuspiel')
+plt.xlabel('Vorhergesagtes Zuspiel')
+plt.title('Confusion Matrix - Validierungsdaten')
+plt.tight_layout()
+plt.savefig("confusion_matrix.png", dpi=300)
+print("Confusion Matrix als 'confusion_matrix.png' gespeichert!")

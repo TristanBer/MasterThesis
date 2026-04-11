@@ -4,6 +4,8 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from sklearn.metrics import classification_report
+import seaborn as sns
+from sklearn.model_selection import confusion_matrix
 from dataset import VolleyballDataset
 from i3d_model import VolleyballI3DModel
 import matplotlib.pyplot as plt
@@ -58,6 +60,15 @@ def run_epoch(loader, is_train, optimizer=None):
     with torch.set_grad_enabled(is_train):
         for videos, labels in loader:
             videos, labels = videos.to(device), labels.to(device)
+
+            if is_train:
+                for i in range(videos.size(0)):
+                    if torch.rand(1).item() < 0.5:  # 50% Chance
+                        # videos[i] hat die Shape (Frames, Channels, Height, Width)
+                        # Width ist die Dimension 3. spiegeln also horizontla
+                        videos[i] = torch.flip(videos[i], dims=[3])
+
+
             outputs = model(videos)
             loss = criterion(outputs, labels)
 
@@ -178,3 +189,20 @@ plt.grid(True)
 plt.tight_layout()
 plt.savefig("i3d_learning_curve.png", dpi=300)
 print("\nGraph saved as 'i3d_learning_curve.png'")
+
+#confusion matrix als bild abspeichern
+print("Erstelle Confusion Matrix für i3D...")
+# final_labels und final_preds musst du im Baseline-Skript eventuell noch aus dem val_loader ziehen,
+# im i3d_train.py hast du sie bereits aus der run_epoch Funktion!
+cm = confusion_matrix(final_labels, final_preds)
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=full_dataset.class_names,
+            yticklabels=full_dataset.class_names)
+plt.ylabel('Tatsächliches Zuspiel')
+plt.xlabel('Vorhergesagtes Zuspiel')
+plt.title('Confusion Matrix - Validierungsdaten')
+plt.tight_layout()
+plt.savefig("confusion_matrix.png", dpi=300)
+print("Confusion Matrix als 'confusion_matrix.png' gespeichert!")
