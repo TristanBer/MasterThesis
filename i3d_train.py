@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from sklearn.metrics import classification_report
 import seaborn as sns
-from sklearn.model_selection import confusion_matrix
+from sklearn.metrics import confusion_matrix
 from dataset import VolleyballDataset
 from i3d_model import VolleyballI3DModel
 import matplotlib.pyplot as plt
@@ -20,8 +20,8 @@ IMG_SIZE = 112
 BATCH_SIZE = 4
 
 # Two-stage training
-STAGE1_EPOCHS = 5  # Frozen backbone, train head only
-STAGE2_EPOCHS = 15  # Full fine-tuning
+STAGE1_EPOCHS = 1  # Frozen backbone, train head only
+STAGE2_EPOCHS = 1  # Full fine-tuning
 
 # --- 2. DATA PREPARATION ---
 transform = transforms.Compose([
@@ -38,8 +38,8 @@ train_size = int(0.8 * len(full_dataset))
 val_size = len(full_dataset) - train_size
 train_db, val_db = random_split(full_dataset, [train_size, val_size])
 
-train_loader = DataLoader(train_db, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
-val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
+train_loader = DataLoader(train_db, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
+val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
 
 # --- 3. MODEL ---
 num_classes = len(full_dataset.class_names)
@@ -96,113 +96,114 @@ history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
 print(f"\n=== STAGE 1: Training head only for {STAGE1_EPOCHS} epochs ===")
 optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
 
-best_val_acc = 0.0
+if __name__ == '__main__':
+    best_val_acc = 0.0
 
-for epoch in range(STAGE1_EPOCHS):
-    train_loss, train_acc, _, _ = run_epoch(train_loader, is_train=True, optimizer=optimizer)
-    val_loss, val_acc, val_preds, val_labels = run_epoch(val_loader, is_train=False)
+    for epoch in range(STAGE1_EPOCHS):
+        train_loss, train_acc, _, _ = run_epoch(train_loader, is_train=True, optimizer=optimizer)
+        val_loss, val_acc, val_preds, val_labels = run_epoch(val_loader, is_train=False)
 
-    # Save metrics for this epoch
-    history["train_loss"].append(train_loss)
-    history["val_loss"].append(val_loss)
-    history["train_acc"].append(train_acc)
-    history["val_acc"].append(val_acc)
+        # Save metrics for this epoch
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
 
-    print(f"[S1 Epoch {epoch + 1}/{STAGE1_EPOCHS}] "
-          f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | "
-          f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
+        print(f"[S1 Epoch {epoch + 1}/{STAGE1_EPOCHS}] "
+              f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | "
+              f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
 
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
-        torch.save(model.state_dict(), "i3d_best.pth")
-        print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), "i3d_best.pth")
+            print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
-# --- 6. STAGE 2: Unfreeze and fine-tune the whole network ---
-print(f"\n=== STAGE 2: Full fine-tuning for {STAGE2_EPOCHS} epochs ===")
+    # --- 6. STAGE 2: Unfreeze and fine-tune the whole network ---
+    print(f"\n=== STAGE 2: Full fine-tuning for {STAGE2_EPOCHS} epochs ===")
 
-# ADD THIS LINE: Load the best Stage 1 weights before fine-tuning
-model.load_state_dict(torch.load("i3d_best.pth", map_location=device, weights_only=True))
-model.unfreeze_backbone()
+    # ADD THIS LINE: Load the best Stage 1 weights before fine-tuning
+    model.load_state_dict(torch.load("i3d_best.pth", map_location=device, weights_only=True))
+    model.unfreeze_backbone()
 
-# Lower LR + weight decay for fine-tuning
-optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
+    # Lower LR + weight decay for fine-tuning
+    optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
 
-for epoch in range(STAGE2_EPOCHS):
-    train_loss, train_acc, _, _ = run_epoch(train_loader, is_train=True, optimizer=optimizer)
-    val_loss, val_acc, val_preds, val_labels = run_epoch(val_loader, is_train=False)
+    for epoch in range(STAGE2_EPOCHS):
+        train_loss, train_acc, _, _ = run_epoch(train_loader, is_train=True, optimizer=optimizer)
+        val_loss, val_acc, val_preds, val_labels = run_epoch(val_loader, is_train=False)
 
-    scheduler.step(val_loss)
+        scheduler.step(val_loss)
 
-    # Save metrics for this epoch
-    history["train_loss"].append(train_loss)
-    history["val_loss"].append(val_loss)
-    history["train_acc"].append(train_acc)
-    history["val_acc"].append(val_acc)
+        # Save metrics for this epoch
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
 
-    print(f"[S2 Epoch {epoch + 1}/{STAGE2_EPOCHS}] "
-          f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | "
-          f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
+        print(f"[S2 Epoch {epoch + 1}/{STAGE2_EPOCHS}] "
+              f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | "
+              f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
 
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
-        torch.save(model.state_dict(), "i3d_best.pth")
-        print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), "i3d_best.pth")
+            print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
-# --- 7. FINAL EVALUATION with per-class breakdown ---
-print("\n=== FINAL EVALUATION (best checkpoint) ===")
-model.load_state_dict(torch.load("i3d_best.pth", map_location=device, weights_only=True))
-_, final_acc, final_preds, final_labels = run_epoch(val_loader, is_train=False)
+    # --- 7. FINAL EVALUATION with per-class breakdown ---
+    print("\n=== FINAL EVALUATION (best checkpoint) ===")
+    model.load_state_dict(torch.load("i3d_best.pth", map_location=device, weights_only=True))
+    _, final_acc, final_preds, final_labels = run_epoch(val_loader, is_train=False)
 
-print(f"Final Val Accuracy: {final_acc:.2f}%")
-print("\nPer-class report:")
-print(classification_report(final_labels, final_preds, target_names=full_dataset.class_names))
+    print(f"Final Val Accuracy: {final_acc:.2f}%")
+    print("\nPer-class report:")
+    print(classification_report(final_labels, final_preds, target_names=full_dataset.class_names))
 
-# --- 8. PLOTTING THE LEARNING CURVES ---
-total_epochs = STAGE1_EPOCHS + STAGE2_EPOCHS
-epochs_range = range(1, total_epochs + 1)
+    # --- 8. PLOTTING THE LEARNING CURVES ---
+    total_epochs = STAGE1_EPOCHS + STAGE2_EPOCHS
+    epochs_range = range(1, total_epochs + 1)
 
-plt.figure(figsize=(12, 5))
+    plt.figure(figsize=(12, 5))
 
-# Accuracy Plot
-plt.subplot(1, 2, 1)
-plt.plot(epochs_range, history["train_acc"], label="Train Accuracy", marker='o')
-plt.plot(epochs_range, history["val_acc"], label="Val Accuracy", marker='o')
-plt.axvline(x=STAGE1_EPOCHS, color='gray', linestyle='--', label='Unfreeze point')
-plt.title("I3D Training and Validation Accuracy")
-plt.xlabel("Epochs")
-plt.ylabel("Accuracy (%)")
-plt.legend()
-plt.grid(True)
+    # Accuracy Plot
+    plt.subplot(1, 2, 1)
+    plt.plot(epochs_range, history["train_acc"], label="Train Accuracy", marker='o')
+    plt.plot(epochs_range, history["val_acc"], label="Val Accuracy", marker='o')
+    plt.axvline(x=STAGE1_EPOCHS, color='gray', linestyle='--', label='Unfreeze point')
+    plt.title("I3D Training and Validation Accuracy")
+    plt.xlabel("Epochs")
+    plt.ylabel("Accuracy (%)")
+    plt.legend()
+    plt.grid(True)
 
-# Loss Plot
-plt.subplot(1, 2, 2)
-plt.plot(epochs_range, history["train_loss"], label="Train Loss", marker='o')
-plt.plot(epochs_range, history["val_loss"], label="Val Loss", marker='o')
-plt.axvline(x=STAGE1_EPOCHS, color='gray', linestyle='--', label='Unfreeze point')
-plt.title("I3D Training and Validation Loss")
-plt.xlabel("Epochs")
-plt.ylabel("Loss")
-plt.legend()
-plt.grid(True)
+    # Loss Plot
+    plt.subplot(1, 2, 2)
+    plt.plot(epochs_range, history["train_loss"], label="Train Loss", marker='o')
+    plt.plot(epochs_range, history["val_loss"], label="Val Loss", marker='o')
+    plt.axvline(x=STAGE1_EPOCHS, color='gray', linestyle='--', label='Unfreeze point')
+    plt.title("I3D Training and Validation Loss")
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.grid(True)
 
-plt.tight_layout()
-plt.savefig("i3d_learning_curve.png", dpi=300)
-print("\nGraph saved as 'i3d_learning_curve.png'")
+    plt.tight_layout()
+    plt.savefig("i3d_learning_curve.png", dpi=300)
+    print("\nGraph saved as 'i3d_learning_curve.png'")
 
-#confusion matrix als bild abspeichern
-print("Erstelle Confusion Matrix für i3D...")
-# final_labels und final_preds musst du im Baseline-Skript eventuell noch aus dem val_loader ziehen,
-# im i3d_train.py hast du sie bereits aus der run_epoch Funktion!
-cm = confusion_matrix(final_labels, final_preds)
+    #confusion matrix als bild abspeichern
+    print("Erstelle Confusion Matrix für i3D...")
+    # final_labels und final_preds musst du im Baseline-Skript eventuell noch aus dem val_loader ziehen,
+    # im i3d_train.py hast du sie bereits aus der run_epoch Funktion!
+    cm = confusion_matrix(final_labels, final_preds)
 
-plt.figure(figsize=(10, 8))
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-            xticklabels=full_dataset.class_names,
-            yticklabels=full_dataset.class_names)
-plt.ylabel('Tatsächliches Zuspiel')
-plt.xlabel('Vorhergesagtes Zuspiel')
-plt.title('Confusion Matrix - Validierungsdaten')
-plt.tight_layout()
-plt.savefig("confusion_matrix.png", dpi=300)
-print("Confusion Matrix als 'confusion_matrix.png' gespeichert!")
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=full_dataset.class_names,
+                yticklabels=full_dataset.class_names)
+    plt.ylabel('Tatsächliches Zuspiel')
+    plt.xlabel('Vorhergesagtes Zuspiel')
+    plt.title('Confusion Matrix - Validierungsdaten')
+    plt.tight_layout()
+    plt.savefig("confusion_matrix_i3D.png", dpi=300)
+    print("Confusion Matrix als 'confusion_matrix.png' gespeichert!")

@@ -5,14 +5,14 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.model_selection import confusion_matrix
+from sklearn.metrics import confusion_matrix
 from dataset import VolleyballDataset
 from baseline_model import VolleyballBaselineModel
 
 # --- 1. SETUP & HYPERPARAMETERS ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH_SIZE = 4
-EPOCHS = 10  # Auf 10 erhöht für den trainingslauf 2
+EPOCHS = 3  # Auf 10 erhöht für den trainingslauf 2 - auf 3 reduziert für testlauf 3
 LEARNING_RATE = 0.001
 ROOT_DIR = r"D:\Master_Dataset_Extracted"
 
@@ -141,7 +141,7 @@ plt.grid(True)
 # Graph als Bild speichern
 plt.tight_layout()
 plt.savefig("learning_curve.png", dpi=300)
-print("Graph erfolgreich als 'learning_curve.png' gespeichert!")
+print("Graph erfolgreich als 'learning_curve_baseline.png' gespeichert!")
 
 # --- FINAL EVALUATION (Confusion Matrix Daten sammeln) ---
 print("\nLade bestes Modell für die Confusion Matrix...")
@@ -172,5 +172,5 @@ plt.ylabel('Tatsächliches Zuspiel')
 plt.xlabel('Vorhergesagtes Zuspiel')
 plt.title('Confusion Matrix - Validierungsdaten')
 plt.tight_layout()
-plt.savefig("confusion_matrix.png", dpi=300)
+plt.savefig("confusion_matrix_baseline.png", dpi=300)
 print("Confusion Matrix als 'confusion_matrix.png' gespeichert!")
