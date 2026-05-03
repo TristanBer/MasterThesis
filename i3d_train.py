@@ -23,32 +23,10 @@ BATCH_SIZE = 4
 STAGE1_EPOCHS = 1  # Frozen backbone, train head only
 STAGE2_EPOCHS = 1  # Full fine-tuning
 
-# --- 2. DATA PREPARATION ---
-transform = transforms.Compose([
-    transforms.ToPILImage(),
-    transforms.Resize((IMG_SIZE, IMG_SIZE)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.43216, 0.394666, 0.37645],
-                         std=[0.22803, 0.22145, 0.216989])
-])
 
-full_dataset = VolleyballDataset(root_dir=ROOT_DIR, transform=transform, num_frames=NUM_FRAMES)
-
-train_size = int(0.8 * len(full_dataset))
-val_size = len(full_dataset) - train_size
-train_db, val_db = random_split(full_dataset, [train_size, val_size])
-
-train_loader = DataLoader(train_db, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
-val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
-
-# --- 3. MODEL ---
-num_classes = len(full_dataset.class_names)
-model = VolleyballI3DModel(num_classes=num_classes, freeze_backbone=True).to(device)
-criterion = nn.CrossEntropyLoss()
-
-
-# --- 4. HELPER: one epoch of training ---
-def run_epoch(loader, is_train, optimizer=None):
+# --- HELPER: one epoch of training ---
+# (Safe to leave globally defined)
+def run_epoch(model, loader, criterion, is_train, optimizer=None):
     if is_train:
         model.train()
     else:
@@ -65,9 +43,8 @@ def run_epoch(loader, is_train, optimizer=None):
                 for i in range(videos.size(0)):
                     if torch.rand(1).item() < 0.5:  # 50% Chance
                         # videos[i] hat die Shape (Frames, Channels, Height, Width)
-                        # Width ist die Dimension 3. spiegeln also horizontla
+                        # Width ist die Dimension 3. spiegeln also horizontal
                         videos[i] = torch.flip(videos[i], dims=[3])
-
 
             outputs = model(videos)
             loss = criterion(outputs, labels)
@@ -89,19 +66,43 @@ def run_epoch(loader, is_train, optimizer=None):
     return avg_loss, accuracy, all_preds, all_labels
 
 
-# Initialize history tracker before any training begins
-history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
-
-# --- 5. STAGE 1: Train only the FC head ---
-print(f"\n=== STAGE 1: Training head only for {STAGE1_EPOCHS} epochs ===")
-optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
-
 if __name__ == '__main__':
+    # --- 2. DATA PREPARATION ---
+    transform = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.43216, 0.394666, 0.37645],
+                             std=[0.22803, 0.22145, 0.216989])
+    ])
+
+    full_dataset = VolleyballDataset(root_dir=ROOT_DIR, transform=transform, num_frames=NUM_FRAMES)
+
+    train_size = int(0.8 * len(full_dataset))
+    val_size = len(full_dataset) - train_size
+    train_db, val_db = random_split(full_dataset, [train_size, val_size])
+
+    # You can safely increase num_workers now if you want faster data loading!
+    train_loader = DataLoader(train_db, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+
+    # --- 3. MODEL ---
+    num_classes = len(full_dataset.class_names)
+    model = VolleyballI3DModel(num_classes=num_classes, freeze_backbone=True).to(device)
+    criterion = nn.CrossEntropyLoss()
+
+    # Initialize history tracker
+    history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
+
+    # --- 4. STAGE 1: Train only the FC head ---
+    print(f"\n=== STAGE 1: Training head only for {STAGE1_EPOCHS} epochs ===")
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
+
     best_val_acc = 0.0
 
     for epoch in range(STAGE1_EPOCHS):
-        train_loss, train_acc, _, _ = run_epoch(train_loader, is_train=True, optimizer=optimizer)
-        val_loss, val_acc, val_preds, val_labels = run_epoch(val_loader, is_train=False)
+        train_loss, train_acc, _, _ = run_epoch(model, train_loader, criterion, is_train=True, optimizer=optimizer)
+        val_loss, val_acc, val_preds, val_labels = run_epoch(model, val_loader, criterion, is_train=False)
 
         # Save metrics for this epoch
         history["train_loss"].append(train_loss)
@@ -118,10 +119,10 @@ if __name__ == '__main__':
             torch.save(model.state_dict(), "i3d_best.pth")
             print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
-    # --- 6. STAGE 2: Unfreeze and fine-tune the whole network ---
+    # --- 5. STAGE 2: Unfreeze and fine-tune the whole network ---
     print(f"\n=== STAGE 2: Full fine-tuning for {STAGE2_EPOCHS} epochs ===")
 
-    # ADD THIS LINE: Load the best Stage 1 weights before fine-tuning
+    # Load the best Stage 1 weights before fine-tuning
     model.load_state_dict(torch.load("i3d_best.pth", map_location=device, weights_only=True))
     model.unfreeze_backbone()
 
@@ -129,9 +130,11 @@ if __name__ == '__main__':
     optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
 
+    # Note: best_val_acc is NOT reset here. Stage 2 must beat Stage 1 to trigger a save!
+
     for epoch in range(STAGE2_EPOCHS):
-        train_loss, train_acc, _, _ = run_epoch(train_loader, is_train=True, optimizer=optimizer)
-        val_loss, val_acc, val_preds, val_labels = run_epoch(val_loader, is_train=False)
+        train_loss, train_acc, _, _ = run_epoch(model, train_loader, criterion, is_train=True, optimizer=optimizer)
+        val_loss, val_acc, val_preds, val_labels = run_epoch(model, val_loader, criterion, is_train=False)
 
         scheduler.step(val_loss)
 
@@ -150,16 +153,16 @@ if __name__ == '__main__':
             torch.save(model.state_dict(), "i3d_best.pth")
             print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
-    # --- 7. FINAL EVALUATION with per-class breakdown ---
+    # --- 6. FINAL EVALUATION with per-class breakdown ---
     print("\n=== FINAL EVALUATION (best checkpoint) ===")
     model.load_state_dict(torch.load("i3d_best.pth", map_location=device, weights_only=True))
-    _, final_acc, final_preds, final_labels = run_epoch(val_loader, is_train=False)
+    _, final_acc, final_preds, final_labels = run_epoch(model, val_loader, criterion, is_train=False)
 
     print(f"Final Val Accuracy: {final_acc:.2f}%")
     print("\nPer-class report:")
     print(classification_report(final_labels, final_preds, target_names=full_dataset.class_names))
 
-    # --- 8. PLOTTING THE LEARNING CURVES ---
+    # --- 7. PLOTTING THE LEARNING CURVES ---
     total_epochs = STAGE1_EPOCHS + STAGE2_EPOCHS
     epochs_range = range(1, total_epochs + 1)
 
@@ -191,10 +194,8 @@ if __name__ == '__main__':
     plt.savefig("i3d_learning_curve.png", dpi=300)
     print("\nGraph saved as 'i3d_learning_curve.png'")
 
-    #confusion matrix als bild abspeichern
+    # --- 8. CONFUSION MATRIX ---
     print("Erstelle Confusion Matrix für i3D...")
-    # final_labels und final_preds musst du im Baseline-Skript eventuell noch aus dem val_loader ziehen,
-    # im i3d_train.py hast du sie bereits aus der run_epoch Funktion!
     cm = confusion_matrix(final_labels, final_preds)
 
     plt.figure(figsize=(10, 8))
@@ -206,4 +207,4 @@ if __name__ == '__main__':
     plt.title('Confusion Matrix - Validierungsdaten')
     plt.tight_layout()
     plt.savefig("confusion_matrix_i3D.png", dpi=300)
-    print("Confusion Matrix als 'confusion_matrix.png' gespeichert!")
+    print("Confusion Matrix als 'confusion_matrix_i3D.png' gespeichert!")

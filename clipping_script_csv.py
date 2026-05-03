@@ -7,7 +7,7 @@ SSD_PATH = "D:\\"
 GLOBAL_OUTPUT_DIR = os.path.join(SSD_PATH, "Master_Dataset_Extracted")
 
 # Pfad zur CSV-Datei
-CSV_PATH = r"D:\annotated_games\HEN-PFR\HEN-PFR_csv_annotation.csv"
+CSV_PATH = r"D:\annotated_games\BEU-JAN\BEU-JAN_csv_annotation.csv"
 
 # Ordner, in dem die Original-Videos liegen
 VIDEO_DIR = os.path.join(SSD_PATH, "BeachVolleyballData")
