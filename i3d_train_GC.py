@@ -205,9 +205,9 @@ if __name__ == '__main__':
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
                 xticklabels=full_dataset.class_names,
                 yticklabels=full_dataset.class_names)
-    plt.ylabel('Tatsächliches Zuspiel')
-    plt.xlabel('Vorhergesagtes Zuspiel')
-    plt.title('Confusion Matrix - Validierungsdaten')
+    plt.ylabel('Actual setting action')
+    plt.xlabel('Predicted setting action')
+    plt.title('Confusion Matrix - Validation data')
     plt.tight_layout()
     plt.savefig("confusion_matrix_i3D.png", dpi=300)
     print("Confusion Matrix als 'confusion_matrix_i3D.png' gespeichert!")
