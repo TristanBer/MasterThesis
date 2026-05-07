@@ -5,9 +5,10 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, classification_report
 from dataset import VolleyballDataset
 from baseline_model import VolleyballBaselineModel
+import numpy as np
 
 # --- 1. SETUP & HYPERPARAMETERS ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -163,6 +164,12 @@ if __name__ == '__main__':
             # Die Tensoren von der Grafikkarte holen und in normale Python-Listen packen
             final_labels.extend(labels.cpu().tolist())
             final_preds.extend(predicted.cpu().tolist())
+
+    # PER-CLASS REPORT ---
+    print("\nPer-class report:")
+    present_classes = np.unique(final_labels).astype(int)
+    present_names = [full_dataset.class_names[i] for i in present_classes]
+    print(classification_report(final_labels, final_preds, target_names=present_names, labels=present_classes))
 
     print("Erstelle Confusion Matrix für baseline...")
     cm = confusion_matrix(final_labels, final_preds)

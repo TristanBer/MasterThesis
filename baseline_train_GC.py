@@ -5,16 +5,17 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, classification_report
 from dataset import VolleyballDataset
 from baseline_model import VolleyballBaselineModel
+import numpy as np
 
 # --- 1. SETUP & HYPERPARAMETERS ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH_SIZE = 4
-EPOCHS = 3  # Auf 10 erhöht für den trainingslauf 2 - auf 3 reduziert für testlauf 3
+BATCH_SIZE = 128
+EPOCHS = 10  # Auf 10 erhöht für den trainingslauf 2 - auf 3 reduziert für testlauf 3
 LEARNING_RATE = 0.001
-ROOT_DIR = r"D:\Master_Dataset_Extracted"
+ROOT_DIR = "./extracted_sets"
 
 if __name__ == '__main__':
     # --- 2. DATA PREPARATION ---
@@ -31,9 +32,9 @@ if __name__ == '__main__':
     val_size = len(full_dataset) - train_size
     train_db, val_db = random_split(full_dataset, [train_size, val_size])
 
-    # You can safely add num_workers=2 or 4 here later if you want!
-    train_loader = DataLoader(train_db, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False)
+    # increased num_workers and added pin_memory
+    train_loader = DataLoader(train_db, batch_size=BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True, prefetch_factor=2)
+    val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False, num_workers=8, pin_memory=True)
 
     # --- 3. MODEL, LOSS, OPTIMIZER ---
     model = VolleyballBaselineModel(num_classes=len(full_dataset.class_names)).to(device)
@@ -99,7 +100,7 @@ if __name__ == '__main__':
 
         if ep_val_acc > best_val_acc:
             best_val_acc = ep_val_acc
-            torch.save(model.state_dict(), "baseline_best.pth")
+            torch.save(model.state_dict(), "/content/drive/MyDrive/Uni-LI/MT/baseline_best.pth")
             print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
         history_train_loss.append(ep_train_loss)
@@ -112,8 +113,8 @@ if __name__ == '__main__':
         print(f"Val Loss:   {ep_val_loss:.4f} | Val Acc:   {ep_val_acc:.2f}%")
 
     # MODELL SPEICHERN
-    torch.save(model.state_dict(), "volleyball_model_final.pth")
-    print("\nTraining abgeschlossen. Modell unter 'volleyball_model_final.pth' gespeichert.")
+    torch.save(model.state_dict(), "/content/drive/MyDrive/Uni-LI/MT/volleyball_model_final.pth")
+    print("\nTraining abgeschlossen. Letztes modell unter 'volleyball_model_final.pth' gespeichert.")
 
     # --- GRAPHEN ZEICHNEN UND SPEICHERN ---
     print("Erstelle Lernkurven-Graph...")
@@ -143,12 +144,12 @@ if __name__ == '__main__':
 
     # Graph als Bild speichern
     plt.tight_layout()
-    plt.savefig("learning_curve_baseline.png", dpi=300)
+    plt.savefig("/content/drive/MyDrive/Uni-LI/MT/learning_curve_baseline.png", dpi=300)
     print("Graph erfolgreich als 'learning_curve_baseline.png' gespeichert!")
 
     # --- FINAL EVALUATION (Confusion Matrix Daten sammeln) ---
     print("\nLade bestes Modell für die Confusion Matrix...")
-    model.load_state_dict(torch.load("baseline_best.pth", map_location=device, weights_only=True))
+    model.load_state_dict(torch.load("/content/drive/MyDrive/Uni-LI/MT/baseline_best.pth", map_location=device, weights_only=True))
     model.eval()
 
     final_labels = []
@@ -164,6 +165,12 @@ if __name__ == '__main__':
             final_labels.extend(labels.cpu().tolist())
             final_preds.extend(predicted.cpu().tolist())
 
+    #PER-CLASS REPORT ---
+    print("\nPer-class report:")
+    present_classes = np.unique(final_labels).astype(int)
+    present_names = [full_dataset.class_names[i] for i in present_classes]
+    print(classification_report(final_labels, final_preds, target_names=present_names, labels=present_classes))
+
     print("Erstelle Confusion Matrix für baseline...")
     cm = confusion_matrix(final_labels, final_preds)
 
@@ -175,5 +182,5 @@ if __name__ == '__main__':
     plt.xlabel('Predicted setting action')
     plt.title('Confusion Matrix - Validation Data')
     plt.tight_layout()
-    plt.savefig("confusion_matrix_baseline.png", dpi=300)
+    plt.savefig("/content/drive/MyDrive/Uni-LI/MT/confusion_matrix_baseline.png", dpi=300)
     print("Confusion Matrix als 'confusion_matrix_baseline.png' gespeichert!")
