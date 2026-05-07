@@ -10,15 +10,77 @@ from dataset import VolleyballDataset
 from baseline_model import VolleyballBaselineModel
 import numpy as np
 
+# ==========================================
 # --- 1. SETUP & HYPERPARAMETERS ---
+# ==========================================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH_SIZE = 4
-EPOCHS = 3  # Auf 10 erhöht für den trainingslauf 2 - auf 3 reduziert für testlauf 3
-LEARNING_RATE = 0.001
 ROOT_DIR = r"D:\Master_Dataset_Extracted"
 
+# Hardware-Limit der L4 GPU (wegen 60 Frames)
+BATCH_SIZE = 4
+NUM_WORKERS = 4  # Reduziert für L4, um System-RAM Crashes zu vermeiden
+
+# Two-stage training (wie beim I3D)
+STAGE1_EPOCHS = 5  # Frozen backbone, train head only
+STAGE2_EPOCHS = 20  # Full fine-tuning
+LEARNING_RATE_S1 = 1e-3
+LEARNING_RATE_S2 = 1e-4
+
+
+# ==========================================
+# --- 2. HILFSFUNKTION FÜR DEN TRAININGSLOOP ---
+# ==========================================
+def run_epoch(model, loader, criterion, is_train, optimizer=None):
+    if is_train:
+        model.train()
+    else:
+        model.eval()
+
+    total_loss, correct, total = 0.0, 0, 0
+    all_preds, all_labels = [], []
+
+    with torch.set_grad_enabled(is_train):
+        for videos, labels in loader:
+            videos, labels = videos.to(device), labels.to(device)
+
+            # Data Augmentation (Horizontaler Flip) nur im Training
+            if is_train:
+                for i in range(videos.size(0)):
+                    if torch.rand(1).item() < 0.5:
+                        videos[i] = torch.flip(videos[i], dims=[3])
+
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
+                outputs = model(videos)
+                loss = criterion(outputs, labels)
+
+            if is_train:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            total_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+            # Für Evaluation sammeln
+            if not is_train:
+                all_preds.extend(predicted.cpu().tolist())
+                all_labels.extend(labels.cpu().tolist())
+
+    avg_loss = total_loss / len(loader)
+    accuracy = 100 * correct / total
+
+    if not is_train:
+        return avg_loss, accuracy, all_preds, all_labels
+    return avg_loss, accuracy
+
+
+# ==========================================
+# --- 3. HAUPTPROGRAMM ---
+# ==========================================
 if __name__ == '__main__':
-    # --- 2. DATA PREPARATION ---
+    # --- DATA PREPARATION ---
     transform = transforms.Compose([
         transforms.ToPILImage(),
         transforms.Resize((224, 224)),
@@ -32,100 +94,94 @@ if __name__ == '__main__':
     val_size = len(full_dataset) - train_size
     train_db, val_db = random_split(full_dataset, [train_size, val_size])
 
-    # You can safely add num_workers=2 or 4 here later if you want!
-    train_loader = DataLoader(train_db, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False)
+    train_loader = DataLoader(train_db, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
+    val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
 
-    # --- 3. MODEL, LOSS, OPTIMIZER ---
+    # --- MODEL, LOSS, OPTIMIZER ---
     model = VolleyballBaselineModel(num_classes=len(full_dataset.class_names)).to(device)
+
+    # Standard-Loss (ohne Klassengewichte für den ersten Testlauf)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    # --- LISTEN FÜR DEN GRAPHEN ---
-    history_train_loss, history_val_loss = [], []
-    history_train_acc, history_val_acc = [], []
-
-    # --- 4. TRAINING LOOP ---
-    print(f"Starte Training auf {device} für {EPOCHS} Epochen mit {len(full_dataset)} Clips...")
-
+    history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
     best_val_acc = 0.0
 
-    for epoch in range(EPOCHS):
-        # TRAINING PHASE
-        model.train()
-        train_loss = 0.0
-        correct_train = 0
-        total_train = 0
+    # ==========================================
+    # --- 4. STAGE 1: TRAINING HEAD ONLY ---
+    # ==========================================
+    print(f"\n=== STAGE 1: Training head only for {STAGE1_EPOCHS} epochs ===")
 
-        for videos, labels in train_loader:
-            videos, labels = videos.to(device), labels.to(device)
+    # Optimizer kennt nur die Parameter, die nicht eingefroren sind (LSTM & FC)
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=LEARNING_RATE_S1)
 
-            for i in range(videos.size(0)):
-                if torch.rand(1).item() < 0.5:  # 50% Wahrscheinlichkeit
-                    videos[i] = torch.flip(videos[i], dims=[3])
+    for epoch in range(STAGE1_EPOCHS):
+        train_loss, train_acc = run_epoch(model, train_loader, criterion, is_train=True, optimizer=optimizer)
+        val_loss, val_acc, _, _ = run_epoch(model, val_loader, criterion, is_train=False)
 
-            outputs = model(videos)
-            loss = criterion(outputs, labels)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            train_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            total_train += labels.size(0)
-            correct_train += (predicted == labels).sum().item()
-
-        # VALIDATION PHASE
-        model.eval()
-        val_loss = 0.0
-        correct_val = 0
-        total_val = 0
-
-        with torch.no_grad():
-            for videos, labels in val_loader:
-                videos, labels = videos.to(device), labels.to(device)
-                outputs = model(videos)
-                loss = criterion(outputs, labels)
-                val_loss += loss.item()
-                _, predicted = torch.max(outputs.data, 1)
-                total_val += labels.size(0)
-                correct_val += (predicted == labels).sum().item()
-
-        # EPOCHEN-WERTE BERECHNEN UND SPEICHERN
-        ep_train_loss = train_loss / len(train_loader)
-        ep_val_loss = val_loss / len(val_loader)
-        ep_train_acc = 100 * correct_train / total_train
-        ep_val_acc = 100 * correct_val / total_val
-
-        if ep_val_acc > best_val_acc:
-            best_val_acc = ep_val_acc
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
             torch.save(model.state_dict(), "baseline_best.pth")
             print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
-        history_train_loss.append(ep_train_loss)
-        history_val_loss.append(ep_val_loss)
-        history_train_acc.append(ep_train_acc)
-        history_val_acc.append(ep_val_acc)
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
 
-        print(f"\nEpoch [{epoch + 1}/{EPOCHS}]")
-        print(f"Train Loss: {ep_train_loss:.4f} | Train Acc: {ep_train_acc:.2f}%")
-        print(f"Val Loss:   {ep_val_loss:.4f} | Val Acc:   {ep_val_acc:.2f}%")
+        print(
+            f"[S1 Epoch {epoch + 1}/{STAGE1_EPOCHS}] Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
 
-    # MODELL SPEICHERN
+    # ==========================================
+    # --- 5. STAGE 2: FULL FINE-TUNING ---
+    # ==========================================
+    print(f"\n=== STAGE 2: Full fine-tuning for {STAGE2_EPOCHS} epochs ===")
+
+    # WICHTIG: Das beste Modell aus Phase 1 laden, bevor wir das ResNet freigeben
+    model.load_state_dict(
+        torch.load("baseline_best.pth", map_location=device, weights_only=True))
+    model.unfreeze_backbone()
+
+    # Neuer Optimizer mit viel kleinerer Lernrate für das gesamte Netzwerk
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE_S2)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
+
+    for epoch in range(STAGE2_EPOCHS):
+        train_loss, train_acc = run_epoch(model, train_loader, criterion, is_train=True, optimizer=optimizer)
+        val_loss, val_acc, final_preds, final_labels = run_epoch(model, val_loader, criterion, is_train=False)
+
+        # Scheduler schaut, ob der Val-Loss noch sinkt
+        scheduler.step(val_loss)
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), "baseline_best.pth")
+            print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
+
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
+
+        print(
+            f"[S2 Epoch {epoch + 1}/{STAGE2_EPOCHS}] Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
+
     torch.save(model.state_dict(), "volleyball_model_final.pth")
-    print("\nTraining abgeschlossen. Modell unter 'volleyball_model_final.pth' gespeichert.")
+    print("\nTraining abgeschlossen. Letztes Modell unter 'volleyball_model_final.pth' gespeichert.")
 
-    # --- GRAPHEN ZEICHNEN UND SPEICHERN ---
-    print("Erstelle Lernkurven-Graph...")
-    epochs_range = range(1, EPOCHS + 1)
+    # ==========================================
+    # --- 6. GRAPHEN & EVALUATION ---
+    # ==========================================
+    print("\nErstelle Lernkurven-Graph...")
+    total_epochs = STAGE1_EPOCHS + STAGE2_EPOCHS
+    epochs_range = range(1, total_epochs + 1)
 
     plt.figure(figsize=(12, 5))
 
     # Plot 1: Accuracy
     plt.subplot(1, 2, 1)
-    plt.plot(epochs_range, history_train_acc, label='Training Accuracy', marker='o')
-    plt.plot(epochs_range, history_val_acc, label='Validation Accuracy', marker='o')
+    plt.plot(epochs_range, history["train_acc"], label='Training Accuracy', marker='o')
+    plt.plot(epochs_range, history["val_acc"], label='Validation Accuracy', marker='o')
+    plt.axvline(x=STAGE1_EPOCHS, color='gray', linestyle='--', label='Unfreeze point')
     plt.title('Training and Validation Accuracy')
     plt.xlabel('Epochs')
     plt.ylabel('Accuracy (%)')
@@ -134,38 +190,25 @@ if __name__ == '__main__':
 
     # Plot 2: Loss
     plt.subplot(1, 2, 2)
-    plt.plot(epochs_range, history_train_loss, label='Training Loss', marker='o')
-    plt.plot(epochs_range, history_val_loss, label='Validation Loss', marker='o')
+    plt.plot(epochs_range, history["train_loss"], label='Training Loss', marker='o')
+    plt.plot(epochs_range, history["val_loss"], label='Validation Loss', marker='o')
+    plt.axvline(x=STAGE1_EPOCHS, color='gray', linestyle='--', label='Unfreeze point')
     plt.title('Training and Validation Loss')
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
     plt.legend()
     plt.grid(True)
 
-    # Graph als Bild speichern
     plt.tight_layout()
     plt.savefig("learning_curve_baseline.png", dpi=300)
     print("Graph erfolgreich als 'learning_curve_baseline.png' gespeichert!")
 
-    # --- FINAL EVALUATION (Confusion Matrix Daten sammeln) ---
-    print("\nLade bestes Modell für die Confusion Matrix...")
-    model.load_state_dict(torch.load("baseline_best.pth", map_location=device, weights_only=True))
-    model.eval()
+    # --- FINAL EVALUATION (Best Checkpoint) ---
+    print("\nLade bestes Modell für die finale Evaluation...")
+    model.load_state_dict(
+        torch.load("baseline_best.pth", map_location=device, weights_only=True))
+    _, _, final_preds, final_labels = run_epoch(model, val_loader, criterion, is_train=False)
 
-    final_labels = []
-    final_preds = []
-
-    with torch.no_grad():
-        for videos, labels in val_loader:
-            videos, labels = videos.to(device), labels.to(device)
-            outputs = model(videos)
-            _, predicted = torch.max(outputs.data, 1)
-
-            # Die Tensoren von der Grafikkarte holen und in normale Python-Listen packen
-            final_labels.extend(labels.cpu().tolist())
-            final_preds.extend(predicted.cpu().tolist())
-
-    # PER-CLASS REPORT ---
     print("\nPer-class report:")
     present_classes = np.unique(final_labels).astype(int)
     present_names = [full_dataset.class_names[i] for i in present_classes]

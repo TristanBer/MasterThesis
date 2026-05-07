@@ -21,13 +21,13 @@ class VolleyballI3DModel(nn.Module):
                     param.requires_grad = False
 
     def unfreeze_backbone(self):
-        """Call this to switch from Stage 1 to Stage 2 training."""
+        #switch from Stage 1 to Stage 2 training
         for param in self.model.parameters():
             param.requires_grad = True
 
     def forward(self, x):
         # x arrives as (Batch, Frames, C, H, W) from the DataLoader
-        # R3D expects  (Batch, C, Frames, H, W) — so we permute
+        # R3D expects  (Batch, C, Frames, H, W) — so permutation is needed
         x = x.permute(0, 2, 1, 3, 4)
         return self.model(x)
 

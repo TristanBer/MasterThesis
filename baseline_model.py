@@ -9,7 +9,6 @@ class VolleyballBaselineModel(nn.Module):
 
         # 1. Feature Extractor: Pre-trained ResNet18
         resnet = models.resnet18(weights='IMAGENET1K_V1')
-        # Wir entfernen die letzte Klassifizierungsschicht (fc)
         self.feature_extractor = nn.Sequential(*list(resnet.children())[:-1])
 
         # Wir frieren die ResNet-Gewichte für den Anfang ein (Transfer Learning)
@@ -25,8 +24,12 @@ class VolleyballBaselineModel(nn.Module):
                             bidirectional=True)
 
         # 3. Classifier: Verbindet die LSTM-Ausgabe mit deinen 5 Klassen
-        # hidden_dim * 2 wegen Bidirectional
-        self.fc = nn.Linear(hidden_dim * 2, num_classes)
+        self.fc = nn.Linear(hidden_dim * 2, num_classes) # hidden_dim * 2 wegen Bidirectional
+
+    def unfreeze_backbone(self):
+        #Macht den ResNet-Teil trainierbar für Stage 2 Fine-Tuning
+        for param in self.feature_extractor.parameters():
+            param.requires_grad = True
 
     def forward(self, x):
         # x shape: (Batch, Frames, Channels, Height, Width)
