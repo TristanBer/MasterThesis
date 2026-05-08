@@ -65,7 +65,7 @@ if __name__ == "__main__":
     from torchvision import transforms
     from torch.utils.data import DataLoader
 
-    # Das sind die Standard-Werte für ResNet
+    # default values for ResNet
     transform = transforms.Compose([
         transforms.ToPILImage(),
         transforms.Resize((224, 224)),
@@ -73,13 +73,13 @@ if __name__ == "__main__":
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    # Pfad zu deinem neuen Master-Ordner auf der SSD
+    # path to the clips on the SSD
     root = r"D:\Master_Dataset_Extracted"
 
-    # Dataset instanziieren
+    # initialize dataset
     dataset = VolleyballDataset(root_dir=root, transform=transform, num_frames=16)
 
-    # Den ersten Clip laden
+    #load first clip
     video_tensor, label = dataset[0]
 
     print(f"Shape des Video-Tensors: {video_tensor.shape}")

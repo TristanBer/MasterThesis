@@ -10,15 +10,12 @@ from dataset import VolleyballDataset
 from baseline_model import VolleyballBaselineModel
 import numpy as np
 
-# ==========================================
 # --- 1. SETUP & HYPERPARAMETERS ---
-# ==========================================
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu") # for local training tests
 ROOT_DIR = "./extracted_sets"
 
-# Hardware-Limit der L4 GPU (wegen 60 Frames)
-BATCH_SIZE = 8
-NUM_WORKERS = 4  # Reduziert für L4, um System-RAM Crashes zu vermeiden
+BATCH_SIZE = 8 # Hardware-Limit der L4 GPU
+NUM_WORKERS = 4
 
 # Two-stage training (wie beim I3D)
 STAGE1_EPOCHS = 5  # Frozen backbone, train head only
@@ -26,10 +23,7 @@ STAGE2_EPOCHS = 20  # Full fine-tuning
 LEARNING_RATE_S1 = 1e-3
 LEARNING_RATE_S2 = 1e-4
 
-
-# ==========================================
 # --- 2. HILFSFUNKTION FÜR DEN TRAININGSLOOP ---
-# ==========================================
 def run_epoch(model, loader, criterion, is_train, optimizer=None):
     if is_train:
         model.train()
@@ -49,7 +43,7 @@ def run_epoch(model, loader, criterion, is_train, optimizer=None):
                     if torch.rand(1).item() < 0.5:
                         videos[i] = torch.flip(videos[i], dims=[3])
 
-            # Nutze bfloat16 für die L4 GPU (spart VRAM)
+            # use bflaot for L4
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
                 outputs = model(videos)
                 loss = criterion(outputs, labels)
@@ -64,7 +58,7 @@ def run_epoch(model, loader, criterion, is_train, optimizer=None):
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-            # Für Evaluation sammeln
+            # Für Evaluation später sammeln
             if not is_train:
                 all_preds.extend(predicted.cpu().tolist())
                 all_labels.extend(labels.cpu().tolist())
@@ -76,10 +70,7 @@ def run_epoch(model, loader, criterion, is_train, optimizer=None):
         return avg_loss, accuracy, all_preds, all_labels
     return avg_loss, accuracy
 
-
-# ==========================================
 # --- 3. HAUPTPROGRAMM ---
-# ==========================================
 if __name__ == '__main__':
     # --- DATA PREPARATION ---
     transform = transforms.Compose([
@@ -101,15 +92,13 @@ if __name__ == '__main__':
     # --- MODEL, LOSS, OPTIMIZER ---
     model = VolleyballBaselineModel(num_classes=len(full_dataset.class_names)).to(device)
 
-    # Standard-Loss (ohne Klassengewichte für den ersten Testlauf)
+    # Standard-Loss (ohne Klassengewichte)
     criterion = nn.CrossEntropyLoss()
 
     history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
     best_val_acc = 0.0
 
-    # ==========================================
     # --- 4. STAGE 1: TRAINING HEAD ONLY ---
-    # ==========================================
     print(f"\n=== STAGE 1: Training head only for {STAGE1_EPOCHS} epochs ===")
 
     # Optimizer kennt nur die Parameter, die nicht eingefroren sind (LSTM & FC)
@@ -132,17 +121,15 @@ if __name__ == '__main__':
         print(
             f"[S1 Epoch {epoch + 1}/{STAGE1_EPOCHS}] Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
 
-    # ==========================================
     # --- 5. STAGE 2: FULL FINE-TUNING ---
-    # ==========================================
     print(f"\n=== STAGE 2: Full fine-tuning for {STAGE2_EPOCHS} epochs ===")
 
-    # WICHTIG: Das beste Modell aus Phase 1 laden, bevor wir das ResNet freigeben
+    # WICHTIG: load the best model of Phase 1, before we releas the ResNet
     model.load_state_dict(
         torch.load("/content/drive/MyDrive/Uni-LI/MT/baseline_best.pth", map_location=device, weights_only=True))
     model.unfreeze_backbone()
 
-    # Neuer Optimizer mit viel kleinerer Lernrate für das gesamte Netzwerk
+    # new optimizer with smaller learning rate
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE_S2)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
 
@@ -150,7 +137,6 @@ if __name__ == '__main__':
         train_loss, train_acc = run_epoch(model, train_loader, criterion, is_train=True, optimizer=optimizer)
         val_loss, val_acc, final_preds, final_labels = run_epoch(model, val_loader, criterion, is_train=False)
 
-        # Scheduler schaut, ob der Val-Loss noch sinkt
         scheduler.step(val_loss)
 
         if val_acc > best_val_acc:
@@ -169,9 +155,7 @@ if __name__ == '__main__':
     torch.save(model.state_dict(), "/content/drive/MyDrive/Uni-LI/MT/volleyball_model_final.pth")
     print("\nTraining abgeschlossen. Letztes Modell unter 'volleyball_model_final.pth' gespeichert.")
 
-    # ==========================================
     # --- 6. GRAPHEN & EVALUATION ---
-    # ==========================================
     print("\nErstelle Lernkurven-Graph...")
     total_epochs = STAGE1_EPOCHS + STAGE2_EPOCHS
     epochs_range = range(1, total_epochs + 1)
