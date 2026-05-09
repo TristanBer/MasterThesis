@@ -4,7 +4,7 @@ from torchvision.models.video import r3d_18, R3D_18_Weights
 
 
 class VolleyballI3DModel(nn.Module):
-    def __init__(self, num_classes, freeze_backbone=True):
+    def __init__(self, num_classes, freeze_backbone=True, dropout_p=0.5):
         super(VolleyballI3DModel, self).__init__()
 
         # Load R3D-18 pretrained on Kinetics-400
@@ -12,7 +12,10 @@ class VolleyballI3DModel(nn.Module):
 
         # Replace the final classification layer with our own
         in_features = backbone.fc.in_features  # 512 for R3D-18
-        backbone.fc = nn.Linear(in_features, num_classes)
+        backbone.fc = nn.Sequential(
+            nn.Dropout(p=dropout_p),
+            nn.Linear(in_features, num_classes)
+        )
         self.model = backbone
 
         if freeze_backbone:
