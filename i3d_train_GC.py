@@ -11,6 +11,8 @@ from i3d_model import VolleyballI3DModel
 import matplotlib.pyplot as plt
 import numpy as np
 from collections import Counter
+from sklearn.model_selection import StratifiedGroupKFold
+import os
 
 # --- 1. SETUP & HYPERPARAMETERS ---
 ROOT_DIR = "./extracted_sets"
@@ -21,6 +23,8 @@ BATCH_SIZE = 128
 
 STAGE1_EPOCHS = 5
 STAGE2_EPOCHS = 20
+LEARNING_RATE_S1 = 1e-3
+LEARNING_RATE_S2 = 1e-4
 
 
 def compute_class_weights(dataset, train_indices, device):
@@ -80,16 +84,13 @@ def run_epoch(model, loader, criterion, is_train, device, optimizer=None):
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # --- 2. DATA PREPARATION ---
 
     # Training transform: color jitter + scale jitter (RandomResizedCrop)
     train_transform = transforms.Compose([
         transforms.ToPILImage(),
-        # Scale jitter: randomly crop between 70-100% of the frame, then resize.
-        # This simulates the player being closer or further from the camera.
         transforms.RandomResizedCrop(IMG_SIZE, scale=(0.7, 1.0), ratio=(0.85, 1.15)),
-        # Color jitter: vary brightness, contrast, saturation, hue slightly.
-        # Keep values moderate — strong hue shifts can hurt action recognition.
         transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989])
@@ -98,26 +99,44 @@ if __name__ == '__main__':
     # Validation transform: deterministic center crop only (no augmentation)
     val_transform = transforms.Compose([
         transforms.ToPILImage(),
-        transforms.Resize(int(IMG_SIZE * 1.15)),  # slight upscale before center crop
+        transforms.Resize(int(IMG_SIZE * 1.15)),
         transforms.CenterCrop(IMG_SIZE),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989])
     ])
 
-    # Load full dataset once to determine the split, then apply separate transforms
-    # We need two Dataset instances sharing the same split so augmentation only
-    # applies to training clips.
+    # Load full dataset instances sharing the same structural files
     full_dataset_train = VolleyballDataset(root_dir=ROOT_DIR, transform=train_transform, num_frames=NUM_FRAMES)
     full_dataset_val = VolleyballDataset(root_dir=ROOT_DIR, transform=val_transform, num_frames=NUM_FRAMES)
 
-    train_size = int(0.8 * len(full_dataset_train))
+    # Programmatically extract match identifier group strings from the filenames
+    groups = []
+    for path in full_dataset_train.video_files:
+        filename = os.path.basename(path)
+        # Splits on either '_set_' (XML clipping) or '_frame_' (CSV clipping) to isolate the match prefix
+        match_prefix = filename.split('_set_')[0].split('_frame_')[0]
+        groups.append(match_prefix)
 
-    # Manual index split — avoids passing a plain `range` to random_split,
-    # which confuses PyCharm's type checker (it expects a Dataset, not a range).
-    gen = torch.Generator().manual_seed(42)
-    perm = torch.randperm(len(full_dataset_train), generator=gen).tolist()
-    train_indices = perm[:train_size]
-    val_indices = perm[train_size:]
+    # StratifiedGroupKFold splits into 5 chunks (yielding a perfect 80% / 20% split)
+    # It balances class representations while preventing any group/match cross-contamination
+    sgkf = StratifiedGroupKFold(n_splits=5)
+
+    # Extract indices belonging to the first split fold configuration
+    train_indices, val_indices = next(sgkf.split(
+        X=np.zeros(len(full_dataset_train)),
+        y=full_dataset_train.labels,
+        groups=groups
+    ))
+
+    # Thesis Verification Summary: Print exactly how matches were distributed
+    train_matches = sorted(list(set([groups[i] for i in train_indices])))
+    val_matches = sorted(list(set([groups[i] for i in val_indices])))
+    print("\n================ DATA LEAKAGE VERIFICATION ================")
+    print(f"Training Match Splits ({len(train_matches)} games): {train_matches}")
+    print(f"Validation Match Splits ({len(val_matches)} games): {val_matches}")
+    overlap = set(train_matches).intersection(set(val_matches))
+    print(f"Intersection Overlap Check (Must be empty set): {overlap}")
+    print("===========================================================\n")
 
     train_db = Subset(full_dataset_train, train_indices)
     val_db = Subset(full_dataset_val, val_indices)
@@ -139,7 +158,7 @@ if __name__ == '__main__':
 
     # --- 5. STAGE 1: Train only the FC head ---
     print(f"\n=== STAGE 1: Training head only for {STAGE1_EPOCHS} epochs ===")
-    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=LEARNING_RATE_S1)
 
     best_val_acc = 0.0
 
@@ -166,7 +185,7 @@ if __name__ == '__main__':
     model.load_state_dict(torch.load("/content/drive/MyDrive/Uni-LI/MT/i3d_best.pth", map_location=device, weights_only=True))
     model.unfreeze_backbone()
 
-    optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE_S2, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
 
     for epoch in range(STAGE2_EPOCHS):

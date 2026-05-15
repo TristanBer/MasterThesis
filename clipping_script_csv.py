@@ -7,7 +7,7 @@ SSD_PATH = "D:\\"
 GLOBAL_OUTPUT_DIR = os.path.join(SSD_PATH, "Master_Dataset_Extracted")
 
 # Pfad zur CSV-Datei
-CSV_PATH = r"D:\annotated_games\HUS-REI\HUS-REI_csv_annotation.csv"
+CSV_PATH = r"D:\annotated_games\PFR-KÜH\PFR-KÜH_csv_annotation.csv"
 
 # Ordner, in dem die Original-Videos liegen
 VIDEO_DIR = os.path.join(SSD_PATH, "BeachVolleyballData")
@@ -21,7 +21,7 @@ OFFSET_FRAMES = 30  # Startet 1 Sekunde vor dem Ballkontakt
 def extract_from_csv():
     os.makedirs(GLOBAL_OUTPUT_DIR, exist_ok=True)
 
-    with open(CSV_PATH, mode='r', encoding='utf-8-sig') as file:
+    with open(CSV_PATH, mode='r', encoding='cp1252') as file:
         reader = csv.DictReader(file, delimiter=';')
 
         for row_idx, row in enumerate(reader):

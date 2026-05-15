@@ -10,6 +10,8 @@ from dataset import VolleyballDataset
 from baseline_model import VolleyballBaselineModel
 import numpy as np
 from collections import Counter
+from sklearn.model_selection import StratifiedGroupKFold
+import os
 
 # --- 1. SETUP & HYPERPARAMETERS ---
 ROOT_DIR = "./extracted_sets"
@@ -81,52 +83,67 @@ def run_epoch(model, loader, criterion, is_train, device, optimizer=None):
     return avg_loss, accuracy, all_preds, all_labels
 
 
-# --- 2. MAIN ---
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # --- DATA PREPARATION ---
+    # --- 2. DATA PREPARATION ---
 
-    # Training transform: scale jitter + color jitter
+    # Training transform: color jitter + scale jitter (RandomResizedCrop)
     train_transform = transforms.Compose([
         transforms.ToPILImage(),
-        # Scale jitter: randomly crop 70-100% of the frame before resizing.
-        # Simulates players at different distances from the camera.
         transforms.RandomResizedCrop(IMG_SIZE, scale=(0.7, 1.0), ratio=(0.85, 1.15)),
-        # Color jitter: moderate variation in brightness/contrast/saturation.
-        # Hue kept small — large hue shifts would distort court colours.
         transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989])
     ])
 
-    # Validation transform: deterministic resize + center crop — no augmentation
+    # Validation transform: deterministic center crop only (no augmentation)
     val_transform = transforms.Compose([
         transforms.ToPILImage(),
-        transforms.Resize(int(IMG_SIZE * 1.15)),  # slight upscale before center crop
+        transforms.Resize(int(IMG_SIZE * 1.15)),
         transforms.CenterCrop(IMG_SIZE),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989])
     ])
 
-    # Two Dataset instances with separate transforms, sharing the same index split
+    # Load full dataset instances sharing the same structural files
     full_dataset_train = VolleyballDataset(root_dir=ROOT_DIR, transform=train_transform, num_frames=NUM_FRAMES)
     full_dataset_val = VolleyballDataset(root_dir=ROOT_DIR, transform=val_transform, num_frames=NUM_FRAMES)
 
-    train_size = int(0.8 * len(full_dataset_train))
+    # Programmatically extract match identifier group strings from the filenames
+    groups = []
+    for path in full_dataset_train.video_files:
+        filename = os.path.basename(path)
+        # Splits on either '_set_' (XML clipping) or '_frame_' (CSV clipping) to isolate the match prefix
+        match_prefix = filename.split('_set_')[0].split('_frame_')[0]
+        groups.append(match_prefix)
 
-    # Manual index split with fixed seed — avoids passing a plain range() to
-    # random_split (type mismatch) and keeps train/val identical across both datasets
-    gen = torch.Generator().manual_seed(42)
-    perm = torch.randperm(len(full_dataset_train), generator=gen).tolist()
-    train_indices = perm[:train_size]
-    val_indices = perm[train_size:]
+    # StratifiedGroupKFold splits into 5 chunks (yielding a perfect 80% / 20% split)
+    # It balances class representations while preventing any group/match cross-contamination
+    sgkf = StratifiedGroupKFold(n_splits=5)
+
+    # Extract indices belonging to the first split fold configuration
+    train_indices, val_indices = next(sgkf.split(
+        X=np.zeros(len(full_dataset_train)),
+        y=full_dataset_train.labels,
+        groups=groups
+    ))
+
+    # Thesis Verification Summary: Print exactly how matches were distributed
+    train_matches = sorted(list(set([groups[i] for i in train_indices])))
+    val_matches = sorted(list(set([groups[i] for i in val_indices])))
+    print("\n================ DATA LEAKAGE VERIFICATION ================")
+    print(f"Training Match Splits ({len(train_matches)} games): {train_matches}")
+    print(f"Validation Match Splits ({len(val_matches)} games): {val_matches}")
+    overlap = set(train_matches).intersection(set(val_matches))
+    print(f"Intersection Overlap Check (Must be empty set): {overlap}")
+    print("===========================================================\n")
 
     train_db = Subset(full_dataset_train, train_indices)
     val_db = Subset(full_dataset_val, val_indices)
 
-    train_loader = DataLoader(train_db, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True)
-    val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True)
+    train_loader = DataLoader(train_db, batch_size=BATCH_SIZE, shuffle=True, num_workers=12, pin_memory=True)
+    val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False, num_workers=12, pin_memory=True)
 
     # --- CLASS WEIGHTS ---
     class_weights = compute_class_weights(full_dataset_train, train_indices, device)
