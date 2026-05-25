@@ -153,7 +153,7 @@ if __name__ == '__main__':
     model = VolleyballBaselineModel(num_classes=num_classes, dropout_p=0.5).to(device)
 
     # Weighted cross-entropy penalises errors on minority classes more heavily
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
 
     history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
     best_val_acc = 0.0
@@ -189,7 +189,11 @@ if __name__ == '__main__':
     model.load_state_dict(torch.load("/content/drive/MyDrive/Uni-LI/MT/baseline_best.pth", map_location=device, weights_only=True))
     model.unfreeze_backbone()
 
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE_S2, weight_decay=1e-4)
+    optimizer = optim.Adam([
+        {'params': model.feature_extractor.parameters(), 'weight_decay': 5e-4},
+        {'params': model.lstm.parameters(), 'weight_decay': 1e-4},
+        {'params': model.fc.parameters(), 'weight_decay': 1e-4},
+    ], lr=LEARNING_RATE_S2)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
 
     for epoch in range(STAGE2_EPOCHS):

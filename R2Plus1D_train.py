@@ -153,7 +153,7 @@ if __name__ == '__main__':
     model = VolleyballR2Plus1DModel(num_classes=num_classes, freeze_backbone=True, dropout_p=0.5).to(device)
 
     # Weighted cross-entropy penalises errors on rare classes more heavily
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
 
     history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
 
@@ -186,7 +186,7 @@ if __name__ == '__main__':
     model.load_state_dict(torch.load("/workspace/R2Plus1D_best.pth", map_location=device, weights_only=True))
     model.unfreeze_backbone()
 
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE_S2, weight_decay=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE_S2, weight_decay=5e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
 
     for epoch in range(STAGE2_EPOCHS):
