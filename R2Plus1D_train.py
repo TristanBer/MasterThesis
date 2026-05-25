@@ -7,7 +7,7 @@ from sklearn.metrics import classification_report
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
 from dataset import VolleyballDataset
-from i3d_model import VolleyballI3DModel
+from R2Plus1D_model import VolleyballR2Plus1DModel
 import matplotlib.pyplot as plt
 import numpy as np
 from collections import Counter
@@ -15,14 +15,14 @@ from sklearn.model_selection import StratifiedGroupKFold
 import os
 
 # --- 1. SETUP & HYPERPARAMETERS ---
-ROOT_DIR = "./extracted_sets"
+ROOT_DIR = "/workspace/Master_Dataset_Extracted"
 
-NUM_FRAMES = 16
-IMG_SIZE = 112
-BATCH_SIZE = 128
+NUM_FRAMES = 32
+IMG_SIZE = 224
+BATCH_SIZE = 8
 
 STAGE1_EPOCHS = 5
-STAGE2_EPOCHS = 20
+STAGE2_EPOCHS = 15
 LEARNING_RATE_S1 = 1e-3
 LEARNING_RATE_S2 = 1e-4
 
@@ -62,8 +62,9 @@ def run_epoch(model, loader, criterion, is_train, device, optimizer=None):
                     if torch.rand(1).item() < 0.5:
                         videos[i] = torch.flip(videos[i], dims=[3])  # Width dim
 
-            outputs = model(videos)
-            loss = criterion(outputs, labels)
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                outputs = model(videos)
+                loss = criterion(outputs, labels)
 
             if is_train:
                 optimizer.zero_grad()
@@ -149,7 +150,7 @@ if __name__ == '__main__':
 
     # --- 4. MODEL + LOSS (with class weights) ---
     num_classes = len(full_dataset_train.class_names)
-    model = VolleyballI3DModel(num_classes=num_classes, freeze_backbone=True, dropout_p=0.5).to(device)
+    model = VolleyballR2Plus1DModel(num_classes=num_classes, freeze_backbone=True, dropout_p=0.5).to(device)
 
     # Weighted cross-entropy penalises errors on rare classes more heavily
     criterion = nn.CrossEntropyLoss(weight=class_weights)
@@ -177,12 +178,12 @@ if __name__ == '__main__':
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), "/content/drive/MyDrive/Uni-LI/MT/i3d_best.pth")
+            torch.save(model.state_dict(), "/workspace/R2Plus1D_best.pth")
             print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
     # --- 6. STAGE 2: Unfreeze and fine-tune ---
     print(f"\n=== STAGE 2: Full fine-tuning for {STAGE2_EPOCHS} epochs ===")
-    model.load_state_dict(torch.load("/content/drive/MyDrive/Uni-LI/MT/i3d_best.pth", map_location=device, weights_only=True))
+    model.load_state_dict(torch.load("/workspace/R2Plus1D_best.pth", map_location=device, weights_only=True))
     model.unfreeze_backbone()
 
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE_S2, weight_decay=1e-4)
@@ -205,12 +206,12 @@ if __name__ == '__main__':
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), "/content/drive/MyDrive/Uni-LI/MT/i3d_best.pth")
+            torch.save(model.state_dict(), "/workspace/R2Plus1D_best.pth")
             print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
     # --- 7. FINAL EVALUATION ---
     print("\n=== FINAL EVALUATION (best checkpoint) ===")
-    model.load_state_dict(torch.load("/content/drive/MyDrive/Uni-LI/MT/i3d_best.pth", map_location=device, weights_only=True))
+    model.load_state_dict(torch.load("/workspace/R2Plus1D_best.pth", map_location=device, weights_only=True))
     _, final_acc, final_preds, final_labels = run_epoch(model, val_loader, criterion, is_train=False, device=device)
 
     print(f"Final Val Accuracy: {final_acc:.2f}%")
@@ -229,7 +230,7 @@ if __name__ == '__main__':
     plt.plot(epochs_range, history["train_acc"], label="Train Accuracy", marker='o')
     plt.plot(epochs_range, history["val_acc"], label="Val Accuracy", marker='o')
     plt.axvline(x=STAGE1_EPOCHS, color='gray', linestyle='--', label='Unfreeze point')
-    plt.title("I3D Training and Validation Accuracy")
+    plt.title("R2+1D Training and Validation Accuracy")
     plt.xlabel("Epochs")
     plt.ylabel("Accuracy (%)")
     plt.ylim(0, 100)
@@ -240,18 +241,18 @@ if __name__ == '__main__':
     plt.plot(epochs_range, history["train_loss"], label="Train Loss", marker='o')
     plt.plot(epochs_range, history["val_loss"], label="Val Loss", marker='o')
     plt.axvline(x=STAGE1_EPOCHS, color='gray', linestyle='--', label='Unfreeze point')
-    plt.title("I3D Training and Validation Loss")
+    plt.title("R2+1D Training and Validation Loss")
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
     plt.legend()
     plt.grid(True)
 
     plt.tight_layout()
-    plt.savefig("/content/drive/MyDrive/Uni-LI/MT/i3d_learning_curve.png", dpi=300)
-    print("\nGraph saved as 'i3d_learning_curve.png'")
+    plt.savefig("/workspace/R2Plus1D_learning_curve_first_run.png", dpi=300)
+    print("\nGraph saved as 'R2Plus1D_learning_curve_first_run.png'")
 
     # --- 9. CONFUSION MATRIX ---
-    print("Erstelle Confusion Matrix für i3D...")
+    print("Erstelle Confusion Matrix für R2Plus1D...")
     cm = confusion_matrix(final_labels, final_preds)
 
     plt.figure(figsize=(10, 8))
@@ -260,5 +261,5 @@ if __name__ == '__main__':
     plt.xlabel('Predicted setting action')
     plt.title('Confusion Matrix - Validation data')
     plt.tight_layout()
-    plt.savefig("/content/drive/MyDrive/Uni-LI/MT/confusion_matrix_i3D.png", dpi=300)
-    print("Confusion Matrix als 'confusion_matrix_i3D.png' gespeichert!")
+    plt.savefig("/workspace/confusion_matrix_R2Plus1D_first_run.png", dpi=300)
+    print("Confusion Matrix als 'confusion_matrix_R2Plus1D_first_run.png' gespeichert!")
