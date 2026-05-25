@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 from torchvision import transforms
 from sklearn.metrics import classification_report
 import seaborn as sns
@@ -9,28 +9,44 @@ from sklearn.metrics import confusion_matrix
 from dataset import VolleyballDataset
 from i3d_model import VolleyballI3DModel
 import matplotlib.pyplot as plt
+import numpy as np
+from collections import Counter
+from sklearn.model_selection import StratifiedGroupKFold
+import os
 
 # --- 1. SETUP & HYPERPARAMETERS ---
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-ROOT_DIR = r"D:\Master_Dataset_Extracted"
+ROOT_DIR = "./extracted_sets"
 
-# I3D needs 16 frames at 112x112 — for Kinetics pretraining
 NUM_FRAMES = 16
 IMG_SIZE = 112
-BATCH_SIZE = 4
+BATCH_SIZE = 128
 
-# Two-stage training
-STAGE1_EPOCHS = 1  # Frozen backbone, train head only
-STAGE2_EPOCHS = 1  # Full fine-tuning
+STAGE1_EPOCHS = 5
+STAGE2_EPOCHS = 20
+LEARNING_RATE_S1 = 1e-3
+LEARNING_RATE_S2 = 1e-4
 
 
-# --- HELPER: one epoch of training ---
-# (Safe to leave globally defined)
-def run_epoch(model, loader, criterion, is_train, optimizer=None):
-    if is_train:
-        model.train()
-    else:
-        model.eval()
+def compute_class_weights(dataset, train_indices, device):
+    """
+    Computes inverse-frequency class weights from the training subset only,
+    so validation labels never influence the loss function.
+    Returns a tensor of shape (num_classes,) on the correct device.
+    """
+    train_labels = [dataset.labels[i] for i in train_indices]
+    counts = Counter(train_labels)
+    num_classes = len(dataset.class_names)
+    # weight_c = total_train_samples / (num_classes * count_c)
+    total = len(train_labels)
+    weights = [total / (num_classes * counts.get(c, 1)) for c in range(num_classes)]
+    print("\nClass weights (inverse frequency):")
+    for i, (name, w) in enumerate(zip(dataset.class_names, weights)):
+        print(f"  [{i}] {name}: count={counts.get(i, 0)}, weight={w:.4f}")
+    return torch.tensor(weights, dtype=torch.float32).to(device)
+
+
+def run_epoch(model, loader, criterion, is_train, device, optimizer=None):
+    model.train() if is_train else model.eval()
 
     total_loss, correct, total = 0.0, 0, 0
     all_preds, all_labels = [], []
@@ -39,15 +55,16 @@ def run_epoch(model, loader, criterion, is_train, optimizer=None):
         for videos, labels in loader:
             videos, labels = videos.to(device), labels.to(device)
 
+            # Horizontal flip augmentation (training only) — plain loop avoids
+            # bool-tensor fancy-indexing which confuses PyCharm's type checker
             if is_train:
                 for i in range(videos.size(0)):
-                    if torch.rand(1).item() < 0.5:  # 50% Chance
-                        # videos[i] hat die Shape (Frames, Channels, Height, Width)
-                        # Width ist die Dimension 3. spiegeln also horizontal
-                        videos[i] = torch.flip(videos[i], dims=[3])
+                    if torch.rand(1).item() < 0.5:
+                        videos[i] = torch.flip(videos[i], dims=[3])  # Width dim
 
-            outputs = model(videos)
-            loss = criterion(outputs, labels)
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                outputs = model(videos)
+                loss = criterion(outputs, labels)
 
             if is_train:
                 optimizer.zero_grad()
@@ -67,44 +84,89 @@ def run_epoch(model, loader, criterion, is_train, optimizer=None):
 
 
 if __name__ == '__main__':
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # --- 2. DATA PREPARATION ---
-    transform = transforms.Compose([
+
+    # Training transform: color jitter + scale jitter (RandomResizedCrop)
+    train_transform = transforms.Compose([
         transforms.ToPILImage(),
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        transforms.RandomResizedCrop(IMG_SIZE, scale=(0.7, 1.0), ratio=(0.85, 1.15)),
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.43216, 0.394666, 0.37645],
-                             std=[0.22803, 0.22145, 0.216989])
+        transforms.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989])
     ])
 
-    full_dataset = VolleyballDataset(root_dir=ROOT_DIR, transform=transform, num_frames=NUM_FRAMES)
+    # Validation transform: deterministic center crop only (no augmentation)
+    val_transform = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize(int(IMG_SIZE * 1.15)),
+        transforms.CenterCrop(IMG_SIZE),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989])
+    ])
 
-    train_size = int(0.8 * len(full_dataset))
-    val_size = len(full_dataset) - train_size
-    train_db, val_db = random_split(full_dataset, [train_size, val_size])
+    # Load full dataset instances sharing the same structural files
+    full_dataset_train = VolleyballDataset(root_dir=ROOT_DIR, transform=train_transform, num_frames=NUM_FRAMES)
+    full_dataset_val = VolleyballDataset(root_dir=ROOT_DIR, transform=val_transform, num_frames=NUM_FRAMES)
 
-    # You can safely increase num_workers now if you want faster data loading!
-    train_loader = DataLoader(train_db, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+    # Programmatically extract match identifier group strings from the filenames
+    groups = []
+    for path in full_dataset_train.video_files:
+        filename = os.path.basename(path)
+        # Splits on either '_set_' (XML clipping) or '_frame_' (CSV clipping) to isolate the match prefix
+        match_prefix = filename.split('_set_')[0].split('_frame_')[0]
+        groups.append(match_prefix)
 
-    # --- 3. MODEL ---
-    num_classes = len(full_dataset.class_names)
-    model = VolleyballI3DModel(num_classes=num_classes, freeze_backbone=True).to(device)
-    criterion = nn.CrossEntropyLoss()
+    # StratifiedGroupKFold splits into 5 chunks (yielding a perfect 80% / 20% split)
+    # It balances class representations while preventing any group/match cross-contamination
+    sgkf = StratifiedGroupKFold(n_splits=5)
 
-    # Initialize history tracker
+    # Extract indices belonging to the first split fold configuration
+    train_indices, val_indices = next(sgkf.split(
+        X=np.zeros(len(full_dataset_train)),
+        y=full_dataset_train.labels,
+        groups=groups
+    ))
+
+    # Thesis Verification Summary: Print exactly how matches were distributed
+    train_matches = sorted(list(set([groups[i] for i in train_indices])))
+    val_matches = sorted(list(set([groups[i] for i in val_indices])))
+    print("\n================ DATA LEAKAGE VERIFICATION ================")
+    print(f"Training Match Splits ({len(train_matches)} games): {train_matches}")
+    print(f"Validation Match Splits ({len(val_matches)} games): {val_matches}")
+    overlap = set(train_matches).intersection(set(val_matches))
+    print(f"Intersection Overlap Check (Must be empty set): {overlap}")
+    print("===========================================================\n")
+
+    train_db = Subset(full_dataset_train, train_indices)
+    val_db = Subset(full_dataset_val, val_indices)
+
+    train_loader = DataLoader(train_db, batch_size=BATCH_SIZE, shuffle=True, num_workers=12, pin_memory=True)
+    val_loader = DataLoader(val_db, batch_size=BATCH_SIZE, shuffle=False, num_workers=12, pin_memory=True)
+
+    # --- 3. CLASS WEIGHTS ---
+    class_weights = compute_class_weights(full_dataset_train, train_indices, device)
+
+    # --- 4. MODEL + LOSS (with class weights) ---
+    num_classes = len(full_dataset_train.class_names)
+    model = VolleyballI3DModel(num_classes=num_classes, freeze_backbone=True, dropout_p=0.5).to(device)
+
+    # Weighted cross-entropy penalises errors on rare classes more heavily
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+
     history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
 
-    # --- 4. STAGE 1: Train only the FC head ---
+    # --- 5. STAGE 1: Train only the FC head ---
     print(f"\n=== STAGE 1: Training head only for {STAGE1_EPOCHS} epochs ===")
-    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=LEARNING_RATE_S1)
 
     best_val_acc = 0.0
 
     for epoch in range(STAGE1_EPOCHS):
-        train_loss, train_acc, _, _ = run_epoch(model, train_loader, criterion, is_train=True, optimizer=optimizer)
-        val_loss, val_acc, val_preds, val_labels = run_epoch(model, val_loader, criterion, is_train=False)
+        train_loss, train_acc, _, _ = run_epoch(model, train_loader, criterion, is_train=True, device=device, optimizer=optimizer)
+        val_loss, val_acc, val_preds, val_labels = run_epoch(model, val_loader, criterion, is_train=False, device=device)
 
-        # Save metrics for this epoch
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
         history["train_acc"].append(train_acc)
@@ -116,29 +178,23 @@ if __name__ == '__main__':
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), "i3d_best.pth")
+            torch.save(model.state_dict(), "/content/drive/MyDrive/Uni-LI/MT/i3d_best.pth")
             print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
-    # --- 5. STAGE 2: Unfreeze and fine-tune the whole network ---
+    # --- 6. STAGE 2: Unfreeze and fine-tune ---
     print(f"\n=== STAGE 2: Full fine-tuning for {STAGE2_EPOCHS} epochs ===")
-
-    # Load the best Stage 1 weights before fine-tuning
-    model.load_state_dict(torch.load("i3d_best.pth", map_location=device, weights_only=True))
+    model.load_state_dict(torch.load("/content/drive/MyDrive/Uni-LI/MT/i3d_best.pth", map_location=device, weights_only=True))
     model.unfreeze_backbone()
 
-    # Lower LR + weight decay for fine-tuning
-    optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE_S2, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
 
-    # Note: best_val_acc is NOT reset here. Stage 2 must beat Stage 1 to trigger a save!
-
     for epoch in range(STAGE2_EPOCHS):
-        train_loss, train_acc, _, _ = run_epoch(model, train_loader, criterion, is_train=True, optimizer=optimizer)
-        val_loss, val_acc, val_preds, val_labels = run_epoch(model, val_loader, criterion, is_train=False)
+        train_loss, train_acc, _, _ = run_epoch(model, train_loader, criterion, is_train=True, device=device, optimizer=optimizer)
+        val_loss, val_acc, val_preds, val_labels = run_epoch(model, val_loader, criterion, is_train=False, device=device)
 
         scheduler.step(val_loss)
 
-        # Save metrics for this epoch
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
         history["train_acc"].append(train_acc)
@@ -150,25 +206,26 @@ if __name__ == '__main__':
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), "i3d_best.pth")
+            torch.save(model.state_dict(), "/content/drive/MyDrive/Uni-LI/MT/i3d_best.pth")
             print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
-    # --- 6. FINAL EVALUATION with per-class breakdown ---
+    # --- 7. FINAL EVALUATION ---
     print("\n=== FINAL EVALUATION (best checkpoint) ===")
-    model.load_state_dict(torch.load("i3d_best.pth", map_location=device, weights_only=True))
-    _, final_acc, final_preds, final_labels = run_epoch(model, val_loader, criterion, is_train=False)
+    model.load_state_dict(torch.load("/content/drive/MyDrive/Uni-LI/MT/i3d_best.pth", map_location=device, weights_only=True))
+    _, final_acc, final_preds, final_labels = run_epoch(model, val_loader, criterion, is_train=False, device=device)
 
     print(f"Final Val Accuracy: {final_acc:.2f}%")
     print("\nPer-class report:")
-    print(classification_report(final_labels, final_preds, target_names=full_dataset.class_names))
+    present_classes = np.unique(final_labels).astype(int)
+    present_names = [full_dataset_train.class_names[i] for i in present_classes]
+    print(classification_report(final_labels, final_preds, target_names=present_names, labels=present_classes))
 
-    # --- 7. PLOTTING THE LEARNING CURVES ---
+    # --- 8. LEARNING CURVES ---
     total_epochs = STAGE1_EPOCHS + STAGE2_EPOCHS
     epochs_range = range(1, total_epochs + 1)
 
     plt.figure(figsize=(12, 5))
 
-    # Accuracy Plot
     plt.subplot(1, 2, 1)
     plt.plot(epochs_range, history["train_acc"], label="Train Accuracy", marker='o')
     plt.plot(epochs_range, history["val_acc"], label="Val Accuracy", marker='o')
@@ -176,10 +233,10 @@ if __name__ == '__main__':
     plt.title("I3D Training and Validation Accuracy")
     plt.xlabel("Epochs")
     plt.ylabel("Accuracy (%)")
+    plt.ylim(0, 100)
     plt.legend()
     plt.grid(True)
 
-    # Loss Plot
     plt.subplot(1, 2, 2)
     plt.plot(epochs_range, history["train_loss"], label="Train Loss", marker='o')
     plt.plot(epochs_range, history["val_loss"], label="Val Loss", marker='o')
@@ -191,20 +248,18 @@ if __name__ == '__main__':
     plt.grid(True)
 
     plt.tight_layout()
-    plt.savefig("i3d_learning_curve.png", dpi=300)
+    plt.savefig("/content/drive/MyDrive/Uni-LI/MT/i3d_learning_curve.png", dpi=300)
     print("\nGraph saved as 'i3d_learning_curve.png'")
 
-    # --- 8. CONFUSION MATRIX ---
+    # --- 9. CONFUSION MATRIX ---
     print("Erstelle Confusion Matrix für i3D...")
     cm = confusion_matrix(final_labels, final_preds)
 
     plt.figure(figsize=(10, 8))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                xticklabels=full_dataset.class_names,
-                yticklabels=full_dataset.class_names)
-    plt.ylabel('Tatsächliches Zuspiel')
-    plt.xlabel('Vorhergesagtes Zuspiel')
-    plt.title('Confusion Matrix - Validierungsdaten')
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=full_dataset_train.class_names, yticklabels=full_dataset_train.class_names)
+    plt.ylabel('Actual setting action')
+    plt.xlabel('Predicted setting action')
+    plt.title('Confusion Matrix - Validation data')
     plt.tight_layout()
-    plt.savefig("confusion_matrix_i3D.png", dpi=300)
+    plt.savefig("/content/drive/MyDrive/Uni-LI/MT/confusion_matrix_i3D.png", dpi=300)
     print("Confusion Matrix als 'confusion_matrix_i3D.png' gespeichert!")
