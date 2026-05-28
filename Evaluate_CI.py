@@ -171,6 +171,13 @@ def main():
     )
     print_ci_report(ci_results, ci=CI_LEVEL)
 
+    from bootstrap_CI import plot_ci_results
+    plot_ci_results(
+        ci_results,
+        model_name="I3D",  # change per model
+        ci=CI_LEVEL,
+        save_path="./i3d_ci"  # saves i3d_ci_overall.png + i3d_ci_perclass.png
+    )
 
 if __name__ == "__main__":
     main()
