@@ -19,12 +19,12 @@ ROOT_DIR = "/workspace/Master_Dataset_Extracted"
 
 NUM_FRAMES = 16
 IMG_SIZE = 224
-BATCH_SIZE = 16
+BATCH_SIZE = 8
 
 STAGE1_EPOCHS = 5
 STAGE2_EPOCHS = 20
 LEARNING_RATE_S1 = 1e-3
-LEARNING_RATE_S2 = 1e-4
+LEARNING_RATE_S2 = 1e-5
 
 
 def compute_class_weights(dataset, train_indices, device):
@@ -69,6 +69,7 @@ def run_epoch(model, loader, criterion, is_train, device, optimizer=None):
             if is_train:
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
 
             total_loss += loss.item()
@@ -186,7 +187,7 @@ if __name__ == '__main__':
     model.load_state_dict(torch.load("/workspace/X3D_best.pth", map_location=device, weights_only=True))
     model.unfreeze_backbone()
 
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE_S2, weight_decay=5e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE_S2, weight_decay=5e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
 
     for epoch in range(STAGE2_EPOCHS):
