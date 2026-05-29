@@ -6,14 +6,13 @@ from torch.utils.data import DataLoader, Subset
 from torchvision import transforms
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.metrics import classification_report, confusion_matrix
-
 from dataset import VolleyballDataset
-from bootstrap_CI import bootstrap_metrics_ci, print_ci_report
+from bootstrap_CI import bootstrap_metrics_ci, print_ci_report, plot_ci_results
 
 # ============================================================
 # CONFIG  —  edit this block only
 # ============================================================
-ROOT_DIR = "D:/Master_Dataset_Extracted"
+ROOT_DIR = "/workspace/Master_Dataset_Extracted"
 MODEL_KEY = "i3d"   # one of: baseline | i3d | r2plus1d | x3d | videoswin
 N_SPLITS = 5        # MUST match the value used in your training script
 N_BOOTSTRAPS = 10000
@@ -28,35 +27,35 @@ MODEL_CONFIGS = {
         "img_size": 112,
         "mean": [0.43216, 0.394666, 0.37645],
         "std": [0.22803, 0.22145, 0.216989],
-        "ckpt": "./workspace/i3d_best.pth",
+        "ckpt": "/workspace/i3d_best.pth",
     },
     "baseline": {
         "num_frames": 60,
         "img_size": 224,
         "mean": [0.485, 0.456, 0.406],
         "std": [0.229, 0.224, 0.225],
-        "ckpt": "./workspace/baseline_best.pth",
+        "ckpt": "/workspace/baseline_best.pth",
     },
     "r2plus1d": {
         "num_frames": 16,
         "img_size": 112,
         "mean": [0.43216, 0.394666, 0.37645],
         "std": [0.22803, 0.22145, 0.216989],
-        "ckpt": "./workspace/R2Plus1D_best.pth",
+        "ckpt": "/workspace/R2Plus1D_best.pth",
     },
     "x3d": {
         "num_frames": 16,
         "img_size": 112,
         "mean": [0.43216, 0.394666, 0.37645],
         "std": [0.22803, 0.22145, 0.216989],
-        "ckpt": "./workspace/X3D_best.pth",
+        "ckpt": ".workspace/X3D_best.pth",
     },
     "videoswin": {
         "num_frames": 16,
         "img_size": 112,
         "mean": [0.43216, 0.394666, 0.37645],
         "std": [0.22803, 0.22145, 0.216989],
-        "ckpt": "./workspace/VideoSwin_best.pth",
+        "ckpt": "/workspace/VideoSwin_best.pth",
     },
 }
 # ============================================================
@@ -171,12 +170,11 @@ def main():
     )
     print_ci_report(ci_results, ci=CI_LEVEL)
 
-    from bootstrap_CI import plot_ci_results
     plot_ci_results(
         ci_results,
-        model_name="I3D",  # change per model
+        model_name=MODEL_KEY.upper(),
         ci=CI_LEVEL,
-        save_path="./i3d_ci"  # saves i3d_ci_overall.png + i3d_ci_perclass.png
+        save_path=f"./{MODEL_KEY}_ci"  # saves i3d_ci_overall.png + i3d_ci_perclass.png
     )
 
 if __name__ == "__main__":
