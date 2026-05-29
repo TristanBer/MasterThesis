@@ -2,7 +2,7 @@ import torch
 import cv2
 import numpy as np
 from torchvision import transforms
-from baseline_model import VolleyballBaselineModel
+from CNN_BiLSTM_model import VolleyballBaselineModel
 from i3d_model import VolleyballI3DModel
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

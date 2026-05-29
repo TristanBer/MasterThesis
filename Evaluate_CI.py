@@ -67,7 +67,7 @@ def build_model(model_key, num_classes, device):
         from i3d_model import VolleyballI3DModel
         model = VolleyballI3DModel(num_classes=num_classes, freeze_backbone=False, dropout_p=0.5)
     elif model_key == "baseline":
-        from baseline_model import VolleyballBaselineModel
+        from CNN_BiLSTM_model import VolleyballBaselineModel
         model = VolleyballBaselineModel(num_classes=num_classes, dropout_p=0.5)
     elif model_key == "r2plus1d":
         from R2Plus1D_model import VolleyballR2Plus1DModel
@@ -90,7 +90,10 @@ def collect_predictions(model, loader, device):
     all_preds, all_labels = [], []
     for videos, labels in loader:
         videos, labels = videos.to(device), labels.to(device)
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        if device.type == "cuda":
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                outputs = model(videos)
+        else:
             outputs = model(videos)
         _, predicted = torch.max(outputs, 1)
         all_preds.extend(predicted.cpu().tolist())

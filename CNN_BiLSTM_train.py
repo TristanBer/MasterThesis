@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import confusion_matrix, classification_report
 from dataset import VolleyballDataset
-from baseline_model import VolleyballBaselineModel
+from CNN_BiLSTM_model import VolleyballBaselineModel
 import numpy as np
 from collections import Counter
 from sklearn.model_selection import StratifiedGroupKFold
