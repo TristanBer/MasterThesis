@@ -150,7 +150,7 @@ if __name__ == '__main__':
 
     # --- 4. MODEL + LOSS (with class weights) ---
     num_classes = len(full_dataset_train.class_names)
-    model = VolleyballI3DModel(num_classes=num_classes, freeze_backbone=True, dropout_p=0.5).to(device)
+    model = VolleyballI3DModel(num_classes=num_classes, freeze_backbone=True, dropout_p=0.6).to(device)
 
     # Weighted cross-entropy penalises errors on rare classes more heavily
     criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
@@ -186,7 +186,7 @@ if __name__ == '__main__':
     model.load_state_dict(torch.load("/content/drive/MyDrive/Uni-LI/MT/i3d_best.pth", map_location=device, weights_only=True))
     model.unfreeze_backbone()
 
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE_S2, weight_decay=5e-4)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE_S2, weight_decay=2e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
 
     for epoch in range(STAGE2_EPOCHS):

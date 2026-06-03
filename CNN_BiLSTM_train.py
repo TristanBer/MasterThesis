@@ -7,14 +7,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import confusion_matrix, classification_report
 from dataset import VolleyballDataset
-from CNN_BiLSTM_model import VolleyballBaselineModel
+from CNN_BiLSTM_model import VolleyballCNNBiLSTMModel
 import numpy as np
 from collections import Counter
 from sklearn.model_selection import StratifiedGroupKFold
 import os
 
 # --- 1. SETUP & HYPERPARAMETERS ---
-ROOT_DIR = "./extracted_sets"
+ROOT_DIR = "/workspace/Master_Dataset_Extracted"
 
 BATCH_SIZE = 8  # Hardware limit of L4 GPU
 NUM_WORKERS = 4
@@ -150,7 +150,7 @@ if __name__ == '__main__':
 
     # --- MODEL, LOSS, OPTIMIZER ---
     num_classes = len(full_dataset_train.class_names)
-    model = VolleyballBaselineModel(num_classes=num_classes, dropout_p=0.5).to(device)
+    model = VolleyballCNNBiLSTMModel(num_classes=num_classes, dropout_p=0.5).to(device)
 
     # Weighted cross-entropy penalises errors on minority classes more heavily
     criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
@@ -170,7 +170,7 @@ if __name__ == '__main__':
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), "/content/drive/MyDrive/Uni-LI/MT/baseline_best.pth")
+            torch.save(model.state_dict(), "/workspace/CNN_BiLSTM_best.pth")
             print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
         history["train_loss"].append(train_loss)
@@ -186,11 +186,11 @@ if __name__ == '__main__':
     print(f"\n=== STAGE 2: Full fine-tuning for {STAGE2_EPOCHS} epochs ===")
 
     # Load best Stage 1 checkpoint before unfreezing ResNet
-    model.load_state_dict(torch.load("/content/drive/MyDrive/Uni-LI/MT/baseline_best.pth", map_location=device, weights_only=True))
+    model.load_state_dict(torch.load("/workspace/CNN_BiLSTM_best.pth", map_location=device, weights_only=True))
     model.unfreeze_backbone()
 
     optimizer = optim.Adam([
-        {'params': model.feature_extractor.parameters(), 'weight_decay': 5e-4},
+        {'params': model.feature_extractor.parameters(), 'weight_decay': 1e-4},
         {'params': model.lstm.parameters(), 'weight_decay': 1e-4},
         {'params': model.fc.parameters(), 'weight_decay': 1e-4},
     ], lr=LEARNING_RATE_S2)
@@ -204,7 +204,7 @@ if __name__ == '__main__':
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), "/content/drive/MyDrive/Uni-LI/MT/baseline_best.pth")
+            torch.save(model.state_dict(), "/workspace/CNN_BiLSTM_best.pth")
             print(f"  -> Checkpoint saved (best val acc: {best_val_acc:.2f}%)")
 
         history["train_loss"].append(train_loss)
@@ -216,7 +216,7 @@ if __name__ == '__main__':
               f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | "
               f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
 
-    torch.save(model.state_dict(), "/content/drive/MyDrive/Uni-LI/MT/volleyball_model_final.pth")
+    torch.save(model.state_dict(), "/workspace/volleyball_model_final.pth")
     print("\nTraining complete. Final model saved as 'volleyball_model_final.pth'.")
 
     # --- LEARNING CURVES ---
@@ -230,7 +230,7 @@ if __name__ == '__main__':
     plt.plot(epochs_range, history["train_acc"], label='Training Accuracy', marker='o')
     plt.plot(epochs_range, history["val_acc"], label='Validation Accuracy', marker='o')
     plt.axvline(x=STAGE1_EPOCHS, color='gray', linestyle='--', label='Unfreeze point')
-    plt.title('Baseline Training and Validation Accuracy')
+    plt.title('CNN + BiLSTM Training and Validation Accuracy')
     plt.xlabel('Epochs')
     plt.ylabel('Accuracy (%)')
     plt.ylim(0, 100)
@@ -241,19 +241,19 @@ if __name__ == '__main__':
     plt.plot(epochs_range, history["train_loss"], label='Training Loss', marker='o')
     plt.plot(epochs_range, history["val_loss"], label='Validation Loss', marker='o')
     plt.axvline(x=STAGE1_EPOCHS, color='gray', linestyle='--', label='Unfreeze point')
-    plt.title('Baseline Training and Validation Loss')
+    plt.title('CNN + BiLSTM Training and Validation Loss')
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
     plt.legend()
     plt.grid(True)
 
     plt.tight_layout()
-    plt.savefig("/content/drive/MyDrive/Uni-LI/MT/learning_curve_baseline.png", dpi=300)
-    print("Graph saved as 'learning_curve_baseline.png'.")
+    plt.savefig("/workspace/learning_curve_CNN_BiLSTM.png", dpi=300)
+    print("Graph saved as 'learning_curve_CNN_BiLSTM.png'.")
 
     # --- FINAL EVALUATION (Best Checkpoint) ---
     print("\nLoading best model for final evaluation...")
-    model.load_state_dict(torch.load("/content/drive/MyDrive/Uni-LI/MT/baseline_best.pth", map_location=device, weights_only=True))
+    model.load_state_dict(torch.load("/workspace/CNN_BiLSTM_best.pth", map_location=device, weights_only=True))
     _, final_acc, final_preds, final_labels = run_epoch(model, val_loader, criterion, is_train=False, device=device)
 
     print(f"Final Val Accuracy: {final_acc:.2f}%")
@@ -262,7 +262,7 @@ if __name__ == '__main__':
     present_names = [full_dataset_train.class_names[i] for i in present_classes]
     print(classification_report(final_labels, final_preds, target_names=present_names, labels=present_classes))
 
-    print("Creating Confusion Matrix for baseline...")
+    print("Creating Confusion Matrix for CNN+BiLSTM...")
     cm = confusion_matrix(final_labels, final_preds)
 
     plt.figure(figsize=(10, 8))
@@ -271,5 +271,5 @@ if __name__ == '__main__':
     plt.xlabel('Predicted setting action')
     plt.title('Confusion Matrix - Validation Data')
     plt.tight_layout()
-    plt.savefig("/content/drive/MyDrive/Uni-LI/MT/confusion_matrix_baseline.png", dpi=300)
-    print("Confusion Matrix saved as 'confusion_matrix_baseline.png'.")
+    plt.savefig("/workspace/confusion_matrix_CNN_BiLSTM.png", dpi=300)
+    print("Confusion Matrix saved as 'confusion_matrix_CNN_BiLSTM.png'.")

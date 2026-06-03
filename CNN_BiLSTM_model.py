@@ -3,9 +3,9 @@ import torch.nn as nn
 import torchvision.models as models
 
 
-class VolleyballBaselineModel(nn.Module):
+class VolleyballCNNBiLSTMModel(nn.Module):
     def __init__(self, num_classes, hidden_dim=256, num_layers=2, dropout_p=0.5):
-        super(VolleyballBaselineModel, self).__init__()
+        super(VolleyballCNNBiLSTMModel, self).__init__()
 
         # 1. Feature Extractor: Pre-trained ResNet18
         resnet = models.resnet18(weights='IMAGENET1K_V1')
@@ -53,7 +53,7 @@ class VolleyballBaselineModel(nn.Module):
 
 
 if __name__ == "__main__":
-    model = VolleyballBaselineModel(num_classes=5)
+    model = VolleyballCNNBiLSTMModel(num_classes=5)
     fake_video = torch.randn(2, 60, 3, 224, 224)
     output = model(fake_video)
     print(f"Output shape: {output.shape}")   # Expected: [2, 5]

@@ -9,7 +9,7 @@ GLOBAL_OUTPUT_DIR = os.path.join(SSD_PATH, "Master_Dataset_Extracted")
 VIDEO_DIR = os.path.join(SSD_PATH, "BeachVolleyballData")
 
 # HIER DAS GEWÜNSCHTE SPIEL EINTRAGEN (Ordnername in "annotated_games")
-TARGET_GAME = "BEH-BOC"
+TARGET_GAME = "KUH-KIR"
 
 TARGET_SIZE = (448, 448)
 TARGET_FPS = 30

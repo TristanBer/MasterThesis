@@ -8,7 +8,9 @@ import numpy as np
 from collections import Counter
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # --- 1. SETUP & HYPERPARAMETERS ---
 ROOT_DIR = r"D:\Master_Dataset_Extracted"
@@ -17,6 +19,22 @@ NUM_FRAMES = 60  # Nutzt die vollen 60 Frames der gereinigten Clips
 BATCH_SIZE = 8
 
 from dataset import VolleyballDataset
+
+
+def plot_confusion_matrix(y_true, y_pred, class_names, title, filename):
+    """Generates and saves a confusion matrix heatmap."""
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=class_names, yticklabels=class_names)
+    plt.ylabel('Actual setting action')
+    plt.xlabel('Predicted setting action')
+    plt.title(title)
+    plt.tight_layout()
+    plt.savefig(filename, dpi=300)
+    plt.close()
+    print(f"Confusion Matrix saved as '{filename}'")
+
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -67,6 +85,8 @@ if __name__ == '__main__':
     print(f"Mehrheitsklasse im Training: {dataset.class_names[majority_class]}")
     print(f"Validation Accuracy: {accuracy_score(val_labels, zeror_preds) * 100:.2f}%")
     print(classification_report(val_labels, zeror_preds, target_names=dataset.class_names, zero_division=0))
+    plot_confusion_matrix(val_labels, zeror_preds, dataset.class_names,
+                          'Confusion Matrix - Zero-R Baseline', 'confusion_matrix_zero_r.png')
 
     # 2. Stratified Distribution Vorhersage
     total_train = len(train_labels)
@@ -76,6 +96,8 @@ if __name__ == '__main__':
     print("\n=== 5.1.2 Heuristic Stratified Distribution Baseline ===")
     print(f"Validation Accuracy: {accuracy_score(val_labels, strat_preds) * 100:.2f}%")
     print(classification_report(val_labels, strat_preds, target_names=dataset.class_names, zero_division=0))
+    plot_confusion_matrix(val_labels, strat_preds, dataset.class_names,
+                          'Confusion Matrix - Stratified Baseline', 'confusion_matrix_stratified.png')
 
     # --- 4. FEATURE EXTRACTION FÜR BASELINE 3 & 4 (SPATIAL-ONLY) ---
     print("\nInitialisiere ResNet-18 Feature Extractor...")
@@ -141,6 +163,8 @@ if __name__ == '__main__':
 
     print(f"Validation Accuracy: {accuracy_score(Y_val, central_preds) * 100:.2f}%")
     print(classification_report(Y_val, central_preds, target_names=dataset.class_names))
+    plot_confusion_matrix(Y_val, central_preds, dataset.class_names,
+                          'Confusion Matrix - Central Frame Baseline', 'confusion_matrix_central_frame.png')
 
     # --- 6. BASELINE 4 EVALUIERUNG: MEAN-POOLED FEATURES ---
     print("\n=== 5.1.4 Temporally Aggregated Frame Feature Classification ===")
@@ -150,3 +174,7 @@ if __name__ == '__main__':
 
     print(f"Validation Accuracy: {accuracy_score(Y_val, mean_preds) * 100:.2f}%")
     print(classification_report(Y_val, mean_preds, target_names=dataset.class_names))
+    plot_confusion_matrix(Y_val, mean_preds, dataset.class_names,
+                          'Confusion Matrix - Mean Pooled Baseline', 'confusion_matrix_mean_pooled.png')
+
+    print("\n--- All reference baselines evaluated successfully! ---")

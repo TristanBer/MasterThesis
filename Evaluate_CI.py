@@ -66,10 +66,10 @@ def build_model(model_key, num_classes, device):
     if model_key == "i3d":
         from i3d_model import VolleyballI3DModel
         model = VolleyballI3DModel(num_classes=num_classes, freeze_backbone=False, dropout_p=0.5)
-    elif model_key == "baseline":
-        from CNN_BiLSTM_model import VolleyballBaselineModel
-        model = VolleyballBaselineModel(num_classes=num_classes, dropout_p=0.5)
-    elif model_key == "r2plus1d":
+    elif model_key == "CNNBiLSTM":
+        from CNN_BiLSTM_model import VolleyballCNNBiLSTMModel
+        model = VolleyballCNNBiLSTMModel(num_classes=num_classes, dropout_p=0.5)
+    elif model_key == "R(2+1)D":
         from R2Plus1D_model import VolleyballR2Plus1DModel
         model = VolleyballR2Plus1DModel(num_classes=num_classes)
     elif model_key == "x3d":
