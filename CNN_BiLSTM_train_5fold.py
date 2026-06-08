@@ -30,8 +30,8 @@ torch.cuda.manual_seed_all(16)
 # --- 1. SETUP & HYPERPARAMETERS ---
 ROOT_DIR = "/workspace/Master_Dataset_Extracted"
 
-BATCH_SIZE = 8  # Hardware limit of L4 GPU
-NUM_WORKERS = 4
+BATCH_SIZE = 16  # Hardware limit of L4 GPU
+NUM_WORKERS = 8
 NUM_FRAMES = 60
 IMG_SIZE = 224
 

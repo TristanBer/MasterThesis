@@ -8,11 +8,17 @@ script (crop_clips_cvat.py), which relies on manual annotations and is limited t
 5 games, this script can process all 21 games automatically.
 
 For each clip, the script:
-    1. Runs YOLOv8 on every frame to detect "person" instances
-    2. Computes a union bounding box across all detected persons in all frames
-    3. Applies padding, enforces a minimum size, and squares the ROI
-    4. Crops every frame to the ROI and resizes to TARGET_SIZE
-    5. Saves the cropped clip with the same filename to a parallel directory
+    1. Runs YOLOv8 on every frame to detect persons and the sports ball
+    2. Identifies the setter as the person closest to the ball in each frame
+    3. Computes a union bounding box across the identified setter in all frames
+    4. Applies padding, enforces a minimum size, and squares the ROI
+    5. Crops every frame to the ROI and resizes to TARGET_SIZE
+    6. Saves the cropped clip with the same filename to a parallel directory
+
+Setter identification strategy:
+    - If ball is detected: select the person whose bbox center is closest to the ball
+    - If no ball detected: fall back to the person closest to frame center
+    - If no person detected: copy the original clip unchanged
 
 The output directory mirrors the structure of Master_Dataset_Extracted/ so that
 the existing training pipeline can be used without modification.
@@ -34,8 +40,8 @@ import numpy as np
 from ultralytics import YOLO
 
 # --- CONFIGURATION ---
-INPUT_DIR = r"D:\Master_Dataset_Extracted"
-OUTPUT_DIR = r"D:\Master_Dataset_Cropped_YOLO"
+INPUT_DIR = "/workspace/Master_Dataset_Extracted"
+OUTPUT_DIR = "/workspace/Master_Dataset_Cropped_YOLO"
 
 TARGET_SIZE = (448, 448)
 TARGET_FPS = 30
@@ -45,14 +51,20 @@ TARGET_FPS = 30
 YOLO_MODEL = "yolov8n.pt"
 
 # COCO class IDs: 0 = person, 32 = sports ball
-# We primarily detect the person; the ball is too small and inconsistently detected.
-TARGET_CLASSES = [0]  # person only
+# Both are detected; the person closest to the ball is identified as the setter.
+TARGET_CLASSES = [0, 32]  # person + sports ball
 
 # Minimum detection confidence threshold
 CONFIDENCE_THRESHOLD = 0.3
 
 # ROI padding as a fraction of the union bounding box dimensions.
-ROI_PADDING = 0.3
+ROI_PADDING = 0.15
+
+# Detection window: only these frames are used to identify the setter.
+# The setting action typically occurs in frames 20-40 of the 60-frame clip.
+# By restricting detection to this window, the script avoids picking different
+# players across frames and produces a tighter, more consistent crop.
+DETECTION_WINDOW = (20, 40)
 
 # Minimum ROI size in pixels (in the 448x448 clip coordinate space)
 # Proportionally equivalent to 250px in 1920px original ≈ 58px in 448px
@@ -139,17 +151,22 @@ def pad_and_clamp_roi(bbox, frame_width, frame_height, padding=ROI_PADDING,
     return x1, y1, x2, y2
 
 
-def detect_persons_in_clip(model, frames):
+def detect_setter_in_clip(model, frames):
     """
-    Run YOLOv8 inference on all frames of a clip.
+    Run YOLOv8 inference on all frames and identify the setter as the
+    person whose bounding box center is closest to the detected ball.
+
+    For frames where the ball is detected: keeps the closest person to the ball.
+    For frames where no ball is detected: keeps the person closest to frame center.
+    For frames where no person is detected: returns empty list.
 
     Args:
         model: Loaded YOLO model.
         frames: List of numpy arrays (H, W, 3).
 
     Returns:
-        List of lists, where each inner list contains (x1, y1, x2, y2) tuples
-        for detected persons in that frame.
+        List of lists, where each inner list contains at most one
+        (x1, y1, x2, y2) tuple for the identified setter.
     """
     detections_per_frame = []
 
@@ -164,10 +181,52 @@ def detect_persons_in_clip(model, frames):
 
     for result in results:
         frame_dets = []
-        if result.boxes is not None and len(result.boxes) > 0:
-            for box in result.boxes:
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                frame_dets.append((float(x1), float(y1), float(x2), float(y2)))
+        if result.boxes is None or len(result.boxes) == 0:
+            detections_per_frame.append(frame_dets)
+            continue
+
+        # Separate persons and balls
+        persons = []
+        balls = []
+        for box in result.boxes:
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+            cls_id = int(box.cls[0].cpu().numpy())
+            coords = (float(x1), float(y1), float(x2), float(y2))
+            if cls_id == 0:
+                persons.append(coords)
+            elif cls_id == 32:
+                balls.append(coords)
+
+        if not persons:
+            detections_per_frame.append(frame_dets)
+            continue
+
+        if balls:
+            # Use the highest-confidence ball (first in list after NMS)
+            ball = balls[0]
+            ball_cx = (ball[0] + ball[2]) / 2
+            ball_cy = (ball[1] + ball[3]) / 2
+
+            # Find the person closest to the ball center
+            best_person = None
+            best_dist = float('inf')
+            for p in persons:
+                p_cx = (p[0] + p[2]) / 2
+                p_cy = (p[1] + p[3]) / 2
+                dist = ((p_cx - ball_cx) ** 2 + (p_cy - ball_cy) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    best_person = p
+            frame_dets.append(best_person)
+        else:
+            # Fallback: no ball detected, keep the person closest to frame center
+            frame_h, frame_w = frames[0].shape[:2]
+            center_x, center_y = frame_w / 2, frame_h / 2
+            best_person = min(persons, key=lambda p: (
+                ((p[0]+p[2])/2 - center_x)**2 + ((p[1]+p[3])/2 - center_y)**2
+            ))
+            frame_dets.append(best_person)
+
         detections_per_frame.append(frame_dets)
 
     return detections_per_frame
@@ -254,10 +313,20 @@ def process_all_clips():
             frame_h, frame_w = frames[0].shape[:2]
             total_clips += 1
 
-            # Run YOLOv8 detection on all frames
-            detections = detect_persons_in_clip(model, frames)
+            # Only run detection on the setting action window (frames 20-40)
+            # to identify the setter consistently, then apply that crop to all frames
+            win_start, win_end = DETECTION_WINDOW
+            win_start = min(win_start, len(frames))
+            win_end = min(win_end, len(frames))
+            window_frames = frames[win_start:win_end]
 
-            # Compute union bounding box
+            if not window_frames:
+                window_frames = frames  # fallback if clip is shorter than expected
+
+            # Run YOLOv8 detection — identify the setter (person closest to ball)
+            detections = detect_setter_in_clip(model, window_frames)
+
+            # Compute union bounding box from window detections only
             union_bbox = compute_union_bbox_yolo(detections, frame_w, frame_h)
 
             if union_bbox is None:
@@ -279,17 +348,17 @@ def process_all_clips():
             roi = pad_and_clamp_roi(union_bbox, frame_w, frame_h)
             x1, y1, x2, y2 = roi
 
-            # Count frames with at least one detection
+            # Count frames with at least one detection (within the window)
             frames_with_det = sum(1 for d in detections if d)
 
-            # Save cropped clip
+            # Save cropped clip (all frames, not just window)
             save_cropped_clip(frames, roi, output_path)
             total_cropped += 1
 
             if clip_idx < 3 or clip_idx % 50 == 0:
                 print(f"  {clip_name}: ROI=({x1},{y1})-({x2},{y2}) "
                       f"[{x2-x1}x{y2-y1}px], "
-                      f"detections in {frames_with_det}/{len(frames)} frames")
+                      f"detections in {frames_with_det}/{len(window_frames)} window frames")
 
         print(f"  -> {class_name}: {len(clip_files)} clips processed")
 
